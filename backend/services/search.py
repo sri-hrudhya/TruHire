@@ -1,274 +1,151 @@
+import hashlib
 import re
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
-
 from backend.config import settings
 from backend.models import Candidate, Position, CandidateMatch
 from backend.services.ai_service import generate_embedding, generate_match_summary
-from backend.services.opensearch import search_vectors
+from backend.services.qdrant import search_vectors
+from backend.services.opensearch import search_lexical
 from backend.services.scoring import calculate_hybrid_score, extract_skills_from_jd, compute_skill_overlap
 from backend.services.parsing import COMMON_SKILLS, YEARS_EXP_PATTERN
-
 
 MODIFIERS_APPEND = ["and", "also", "too", "plus", "with"]
 MODIFIERS_REPLACE = ["only", "just", "instead", "solely"]
 
 
-def parse_search_query(
-    query_text: str,
-    existing_skills: Optional[List[str]] = None
-) -> Tuple[List[str], Optional[float], str, str]:
-    """
-    Parses a search query string.
-    Identifies modifier intent:
-    - If contains 'and', 'also', 'too': mode is 'append'
-    - If contains 'only', 'just', 'instead': mode is 'replace'
-    - Default: 'append' if existing chips, otherwise 'replace'
-    
-    Returns:
-    (updated_skill_chips, min_years_exp, clean_query_text, modifier_mode)
-    """
+def parse_search_query(query_text: str, existing_skills: Optional[List[str]] = None) -> Tuple[List[str], Optional[float], str, str]:
     existing = list(existing_skills or [])
     text_lower = query_text.lower().strip()
-
     modifier_mode = "neutral"
-    # Check for replace words
     for word in MODIFIERS_REPLACE:
-        if re.search(r'\b' + re.escape(word) + r'\b', text_lower):
-            modifier_mode = "replace"
-            break
-
-    # Check for append words
+        if re.search(r"\b" + re.escape(word) + r"\b", text_lower):
+            modifier_mode = "replace"; break
     if modifier_mode == "neutral":
         for word in MODIFIERS_APPEND:
-            if re.search(r'\b' + re.escape(word) + r'\b', text_lower):
-                modifier_mode = "append"
-                break
-
-    # Extract skills
-    found_skills = []
-    for skill in COMMON_SKILLS:
-        if re.search(r'\b' + re.escape(skill.lower()) + r'\b', text_lower):
-            found_skills.append(skill)
-
-    # Extract experience requirements
+            if re.search(r"\b" + re.escape(word) + r"\b", text_lower):
+                modifier_mode = "append"; break
+    found_skills = [skill for skill in COMMON_SKILLS if re.search(r"\b" + re.escape(skill.lower()) + r"\b", text_lower)]
     min_exp = None
-    exp_matches = YEARS_EXP_PATTERN.findall(query_text)
-    if exp_matches:
-        try:
-            min_exp = float(exp_matches[0])
-        except ValueError:
-            pass
-
-    # Resolve skill chips based on modifier mode
+    matches = YEARS_EXP_PATTERN.findall(query_text)
+    if matches:
+        try: min_exp = float(matches[0])
+        except ValueError: pass
     if modifier_mode == "replace":
-        updated_skills = found_skills if found_skills else existing
-    elif modifier_mode == "append":
-        combined = set(existing)
-        combined.update(found_skills)
-        updated_skills = list(combined)
+        updated = found_skills or existing
     else:
-        # Default behavior: union of existing and new skills
-        combined = set(existing)
-        combined.update(found_skills)
-        updated_skills = list(combined)
-
-    return updated_skills, min_exp, query_text, modifier_mode
+        updated = list(dict.fromkeys(existing + found_skills))
+    # Remove explicit filter terms from the lexical query so BM25 sees the user's intent.
+    clean = re.sub(r"\b(?:only|just|instead|solely|and|also|too|plus|with)\b", " ", query_text, flags=re.I)
+    return updated, min_exp, re.sub(r"\s+", " ", clean).strip(), modifier_mode
 
 
-def execute_candidate_search(
-    db: Session,
-    query_text: str = "",
-    filter_skills: Optional[List[str]] = None,
-    min_experience: Optional[float] = None,
-    position_id: Optional[str] = None,
-    top_n: int = 20
-) -> Dict[str, Any]:
-    """
-    Executes search over the shared candidate pool.
-    - Resolves filter chips and experience filters.
-    - Uses vector semantic search.
-    - If position_id is selected, scores candidates against that JD and persists CandidateMatch.
-    - Always strictly paginated to top_n (max SEARCH_MAX_TOP_N).
-    - Returns total match count and top-N ranked items.
-    """
-    # 1. Enforce strict pagination limits
+def _rrf(results: List[Tuple[str, List[Dict[str, Any]]]], top_n: int) -> Dict[str, Dict[str, float]]:
+    fused: Dict[str, Dict[str, float]] = {}
+    weights = {"vector": settings.HYBRID_VECTOR_WEIGHT, "lexical": settings.HYBRID_LEXICAL_WEIGHT}
+    for source, rows in results:
+        for rank, row in enumerate(rows, start=1):
+            cid = str(row["candidate_id"])
+            fused.setdefault(cid, {"rrf": 0.0, "vector_score": 0.0, "lexical_score": 0.0})
+            fused[cid]["rrf"] += weights.get(source, 1.0) / (settings.HYBRID_RRF_K + rank)
+            fused[cid][f"{source}_score"] = float(row.get("score", 0.0))
+    return dict(sorted(fused.items(), key=lambda kv: kv[1]["rrf"], reverse=True)[:top_n])
+
+def _normalize_lexical_scores(fused: Dict[str, Dict[str, float]]) -> None:
+    scores = [v["lexical_score"] for v in fused.values() if v.get("lexical_score", 0) > 0]
+    max_score = max(scores) if scores else 0.0
+    for row in fused.values():
+        raw = row.get("lexical_score", 0.0)
+        row["lexical_norm"] = (raw / max_score) if max_score > 0 else 0.0
+
+def _semantic_score(fused_row: Dict[str, float]) -> float:
+    # Qdrant returns the actual cosine similarity. Do not derive a fake
+    # similarity from RRF rank; RRF is retrieval fusion, not semantic similarity.
+    score = float(fused_row.get("vector_score", 0.0))
+    return max(0.0, min(1.0, score))
+
+
+def _candidate_payload(c: Candidate) -> Dict[str, Any]:
+    return {
+        "id": c.id, "candidate_name": c.candidate_name, "email": c.email, "phone": c.phone,
+        "extracted_skills": c.extracted_skills or [], "years_experience": c.years_experience,
+        "education": c.education, "status": c.status, "original_filename": c.original_filename,
+        "uploaded_at": c.uploaded_at.isoformat() if c.uploaded_at else None,
+    }
+
+
+def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20) -> Dict[str, Any]:
     limit = max(1, min(top_n, settings.SEARCH_MAX_TOP_N))
-
-    # 2. Base candidate pool query
-    base_query = db.query(Candidate)
-
-    if min_experience is not None and min_experience > 0:
-        base_query = base_query.filter(Candidate.years_experience >= min_experience)
-
-    all_candidates = base_query.all()
-    total_candidates_count = len(all_candidates)
-
-    if not all_candidates:
-        return {
-            "total_matches": 0,
-            "top_n": limit,
-            "results": [],
-            "scored_against_jd": None
-        }
-
-    # 3. Filter by skills if present
     active_skills = [s.strip() for s in (filter_skills or []) if s.strip()]
-    filtered_candidates = []
-    for cand in all_candidates:
-        cand_skills = [s.lower() for s in (cand.extracted_skills or [])]
-        if active_skills:
-            # Must match at least one active filter skill
-            if any(req.lower() in cand_skills for req in active_skills):
-                filtered_candidates.append(cand)
-        else:
-            filtered_candidates.append(cand)
+    target_position = db.query(Position).filter(Position.id == position_id).first() if position_id else None
 
-    total_matches = len(filtered_candidates)
+    if target_position:
+        lexical_query = f"{target_position.title} {target_position.jd_text}"
+        if query_text.strip():
+            lexical_query = f"{lexical_query} {query_text.strip()}"
+        vector = generate_embedding(lexical_query)
+        jd_skills = extract_skills_from_jd(target_position.jd_text)
+    else:
+        lexical_query = query_text.strip()
+        vector = generate_embedding(lexical_query) if lexical_query else None
+        jd_skills = active_skills
 
-    # 4. If Position / JD is selected, compute candidate-vs-JD match scores
-    target_position = None
-    if position_id:
-        target_position = db.query(Position).filter(Position.id == position_id).first()
+    candidate_limit = min(max(limit * settings.SEARCH_CANDIDATE_MULTIPLIER, 50), 500)
+    vector_rows = search_vectors(vector, candidate_limit) if vector else []
+    lexical_rows = search_lexical(lexical_query, candidate_limit, active_skills, min_experience) if lexical_query else []
+    fused = _rrf([("vector", vector_rows), ("lexical", lexical_rows)], candidate_limit)
+    _normalize_lexical_scores(fused)
+
+    # If indexes are empty, use the relational pool rather than returning fake semantic scores.
+    candidate_ids = list(fused.keys())
+    if not candidate_ids:
+        q = db.query(Candidate)
+        if min_experience is not None: q = q.filter(Candidate.years_experience >= min_experience)
+        candidates = q.order_by(Candidate.uploaded_at.desc()).limit(candidate_limit).all()
+    else:
+        candidates = db.query(Candidate).filter(Candidate.id.in_(candidate_ids)).all()
+        by_id = {c.id: c for c in candidates}
+        candidates = [by_id[cid] for cid in candidate_ids if cid in by_id]
+
+    # Hard skill filters are AND-like for explicit chips: every chip should be present.
+    if active_skills:
+        required = {s.lower() for s in active_skills}
+        candidates = [c for c in candidates if required.issubset({s.lower() for s in (c.extracted_skills or [])})]
+    if min_experience is not None:
+        candidates = [c for c in candidates if c.years_experience >= min_experience]
 
     results = []
-
-    # Generate query or JD vector for semantic ranking
-    if target_position:
-        ref_text = f"{target_position.title} {target_position.jd_text}"
-        ref_vector = generate_embedding(ref_text)
-        jd_skills = extract_skills_from_jd(target_position.jd_text)
-
-        # Get vector rankings
-        vec_results = search_vectors(ref_vector, top_k=len(filtered_candidates) or 1)
-        sim_map = {item["candidate_id"]: item["score"] for item in vec_results}
-
-        for cand in filtered_candidates:
-            sim = sim_map.get(cand.id, 0.5)
+    for cand in candidates:
+        fused_row = fused.get(cand.id, {"rrf": 0.0, "vector_score": 0.0, "lexical_score": 0.0})
+        semantic = _semantic_score(fused_row)
+        lexical_norm = float(fused_row.get("lexical_norm", 0.0))
+        retrieval_score = (settings.HYBRID_VECTOR_WEIGHT * semantic) + (settings.HYBRID_LEXICAL_WEIGHT * lexical_norm)
+        if target_position:
             final_score, breakdown = calculate_hybrid_score(
-                semantic_sim=sim,
-                candidate_skills=cand.extracted_skills or [],
-                candidate_exp=cand.years_experience,
-                candidate_edu=cand.education or "",
-                jd_title=target_position.title,
-                jd_text=target_position.jd_text,
+                semantic_sim=retrieval_score, candidate_skills=cand.extracted_skills or [], candidate_exp=cand.years_experience,
+                candidate_edu=cand.education or "", jd_title=target_position.title, jd_text=target_position.jd_text,
                 target_skills=jd_skills
             )
-
-            # Check if CandidateMatch exists or needs update
-            existing_match = db.query(CandidateMatch).filter(
-                CandidateMatch.candidate_id == cand.id,
-                CandidateMatch.position_id == target_position.id
-            ).first()
-
-            summary, quote, section = generate_match_summary(
-                candidate_skills=cand.extracted_skills or [],
-                candidate_exp=cand.years_experience,
-                candidate_edu=cand.education or "",
-                jd_title=target_position.title,
-                jd_text=target_position.jd_text,
-                match_score=final_score
-            )
-
-            if existing_match:
-                existing_match.match_score = final_score
-                existing_match.score_breakdown = breakdown
-                existing_match.llm_summary = summary
-                existing_match.cited_quote = quote
-                existing_match.cited_section = section
-                existing_match.jd_version = target_position.jd_version
-            else:
-                new_match = CandidateMatch(
-                    candidate_id=cand.id,
-                    position_id=target_position.id,
-                    match_score=final_score,
-                    score_breakdown=breakdown,
-                    llm_summary=summary,
-                    cited_quote=quote,
-                    cited_section=section,
-                    jd_version=target_position.jd_version
-                )
-                db.add(new_match)
-
-            results.append({
-                "candidate": {
-                    "id": cand.id,
-                    "candidate_name": cand.candidate_name,
-                    "email": cand.email,
-                    "phone": cand.phone,
-                    "extracted_skills": cand.extracted_skills or [],
-                    "years_experience": cand.years_experience,
-                    "education": cand.education,
-                    "status": cand.status,
-                    "original_filename": cand.original_filename,
-                    "uploaded_at": cand.uploaded_at.isoformat() if cand.uploaded_at else None,
-                },
-                "match_score": final_score,
-                "score_breakdown": breakdown,
-                "llm_summary": summary,
-                "cited_quote": quote,
-                "cited_section": section
-            })
-
-        db.commit()
-        # Sort descending by match_score
-        results.sort(key=lambda x: x["match_score"], reverse=True)
-
-    else:
-        # No JD selected: rank by skill overlap with active_skills & query semantic similarity
-        if query_text:
-            query_vector = generate_embedding(query_text)
-            vec_results = search_vectors(query_vector, top_k=len(filtered_candidates) or 1)
-            sim_map = {item["candidate_id"]: item["score"] for item in vec_results}
+            summary, quote, section = generate_match_summary(cand.extracted_skills or [], cand.years_experience, cand.education or "", target_position.title, target_position.jd_text, final_score)
+            match = db.query(CandidateMatch).filter(CandidateMatch.candidate_id == cand.id, CandidateMatch.position_id == target_position.id).first()
+            if not match:
+                match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
+                db.add(match)
+            match.match_score = final_score; match.score_breakdown = breakdown; match.llm_summary = summary; match.cited_quote = quote; match.cited_section = section; match.jd_version = target_position.jd_version
+            score = final_score
         else:
-            sim_map = {}
+            overlap, matched, missing = compute_skill_overlap(cand.extracted_skills or [], active_skills)
+            # RRF is used for retrieval; semantic cosine is shown separately. When only lexical retrieval exists, score remains meaningful.
+            score = round(((0.70 * retrieval_score) + (0.30 * overlap)) * 100, 1)
+            summary = f"Hybrid retrieval matched {len(matched)} requested skill(s)."
+            quote = ""
+            section = "Search"
+            breakdown = {"final_score": score, "semantic_score": round(semantic * 100, 1), "retrieval_score": round(retrieval_score * 100, 1), "hybrid_rrf": round(fused_row.get("rrf", 0.0), 6), "lexical_score": round(fused_row.get("lexical_score", 0.0), 3), "lexical_normalized": round(lexical_norm * 100, 1), "matched_skills": matched, "missing_skills": missing}
 
-        for cand in filtered_candidates:
-            # Skill overlap with active filter chips
-            overlap_ratio, matched, missing = compute_skill_overlap(cand.extracted_skills or [], active_skills)
-            sem_sim = sim_map.get(cand.id, 0.5)
+        results.append({"candidate": _candidate_payload(cand), "match_score": score, "score_breakdown": breakdown, "llm_summary": summary, "cited_quote": quote, "cited_section": section})
 
-            # Combined ranking score
-            rank_score = round(((0.6 * overlap_ratio) + (0.4 * sem_sim)) * 100.0, 1)
-
-            results.append({
-                "candidate": {
-                    "id": cand.id,
-                    "candidate_name": cand.candidate_name,
-                    "email": cand.email,
-                    "phone": cand.phone,
-                    "extracted_skills": cand.extracted_skills or [],
-                    "years_experience": cand.years_experience,
-                    "education": cand.education,
-                    "status": cand.status,
-                    "original_filename": cand.original_filename,
-                    "uploaded_at": cand.uploaded_at.isoformat() if cand.uploaded_at else None,
-                },
-                "match_score": rank_score,
-                "score_breakdown": {
-                    "final_score": rank_score,
-                    "skill_score": round(overlap_ratio * 100, 1),
-                    "semantic_score": round(sem_sim * 100, 1),
-                    "matched_skills": matched,
-                    "missing_skills": missing
-                },
-                "llm_summary": f"Matches {len(matched)} requested skill(s).",
-                "cited_quote": None,
-                "cited_section": None
-            })
-
-        results.sort(key=lambda x: x["match_score"], reverse=True)
-
-    # Strictly slice top-N
-    paginated_results = results[:limit]
-
-    return {
-        "total_matches": total_matches,
-        "top_n": limit,
-        "results": paginated_results,
-        "scored_against_jd": {
-            "id": target_position.id,
-            "title": target_position.title,
-            "version": target_position.jd_version
-        } if target_position else None
-    }
+    db.commit() if target_position else None
+    results.sort(key=lambda x: x["match_score"], reverse=True)
+    return {"total_matches": len(results), "top_n": limit, "results": results[:limit],
+            "scored_against_jd": ({"id": target_position.id, "title": target_position.title, "version": target_position.jd_version} if target_position else None),
+            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows)}}

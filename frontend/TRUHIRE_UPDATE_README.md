@@ -11,7 +11,7 @@ POST /api/job-descriptions
   "jd_text": "<job description>"
 }
 
-The frontend API base remains `/api`, so Vite can proxy requests to the FastAPI backend.
+The frontend API base remains `/api`, and Vite now proxies `/api` and `/uploads` to the FastAPI backend at `http://127.0.0.1:8999`.
 
 ## Important
 
@@ -26,3 +26,14 @@ Expected statuses:
 - 404: backend route mismatch
 - 422: Pydantic/request schema mismatch
 - 500: backend exception
+
+
+## Local backend port
+
+The frontend is configured for the TruHire FastAPI backend on port **8999**. Start the backend from the project root with:
+
+```powershell
+uv run python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8999
+```
+
+Then start the frontend with `npm run dev` and open `http://localhost:5173`.

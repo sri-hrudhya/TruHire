@@ -64,6 +64,8 @@ export const candidatesApi = {
 
 export const searchApi = {
   search: (payload) => api.post('/search', payload),
+  getState: () => api.get('/search/state'),
+  clearState: () => api.delete('/search/state'),
   parseQuery: (query, existing_skills = []) => api.post('/search/parse-query', { query, existing_skills }),
 };
 
@@ -76,6 +78,8 @@ export const analyticsApi = {
 
 export const chatApi = {
   sendMessage: (payload) => api.post('/chat', payload),
+  listConversations: () => api.get('/chat/conversations'),
+  getConversation: (id) => api.get(`/chat/conversations/${id}`),
 };
 
 export const exportApi = {

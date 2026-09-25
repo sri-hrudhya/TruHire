@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   Search, 
@@ -31,19 +31,44 @@ export default function SearchPage() {
   const [expandedRow, setExpandedRow] = useState(null);
   const [modifierNotice, setModifierNotice] = useState(null);
 
-  // Load available JDs for optional selection
+  const hydratedRef = useRef(false);
+
+  // Restore the last search from the persistent server-side search state.
+  // This prevents the query/results disappearing when navigating to a resume and back.
   useEffect(() => {
-    const loadJDs = async () => {
+    const restoreSearch = async () => {
       try {
-        const res = await jdApi.list();
-        setJds(res.data);
+        const [jdRes, stateRes] = await Promise.all([jdApi.list(), searchApi.getState()]);
+        setJds(jdRes.data);
+        const state = stateRes.data?.state;
+        if (state) {
+          setQuery(state.query || '');
+          setFilterChips(state.filter_skills || []);
+          setMinExp(state.min_experience ?? '');
+          setSelectedJdId(state.position_id || '');
+          setTopN(state.top_n || 20);
+          setSearchResults({
+            total_matches: state.total_matches || 0,
+            top_n: state.top_n || 20,
+            results: state.results || [],
+            retrieval: state.retrieval || {},
+            scored_against_jd: state.position_id ? { id: state.position_id, title: (jdRes.data.find(j => j.id === state.position_id)?.title || 'Selected JD'), version: (jdRes.data.find(j => j.id === state.position_id)?.jd_version || '') } : null,
+            active_filter_chips: state.filter_skills || [],
+            min_experience: state.min_experience ?? null,
+            query: state.query || ''
+          });
+        } else {
+          await handleSearch();
+        }
       } catch (err) {
-        console.error('Failed to load JDs for search:', err);
+        console.error('Failed to restore persistent search state:', err);
+        try { await handleSearch(); } catch (_) {}
+      } finally {
+        hydratedRef.current = true;
       }
     };
-    loadJDs();
-    // Run initial search
-    handleSearch();
+    restoreSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSearch = async (overrideChips = null, overrideJd = null) => {
@@ -86,11 +111,12 @@ export default function SearchPage() {
     handleSearch(updated);
   };
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     setQuery('');
     setFilterChips([]);
     setMinExp('');
     setSelectedJdId('');
+    try { await searchApi.clearState(); } catch (err) { console.error('Failed to clear saved search state:', err); }
     handleSearch([], '');
   };
 
