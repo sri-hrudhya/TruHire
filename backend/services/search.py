@@ -1,10 +1,15 @@
 import hashlib
+import json
 import re
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.models import Candidate, Position, CandidateMatch
-from backend.services.ai_service import generate_embedding, generate_match_summary
+from backend.services import decision
+from backend.services.ai_service import generate_embedding, generate_match_summary, heuristic_match_summary
+from backend.services.cache import get_cache, set_cache
+from backend.services.guardrails import check_search_result
+from backend.services.pii import redact_pii
 from backend.services.qdrant import search_vectors
 from backend.services.opensearch import search_lexical
 from backend.services.scoring import calculate_hybrid_score, extract_skills_from_jd, compute_skill_overlap
@@ -74,8 +79,21 @@ def _candidate_payload(c: Candidate) -> Dict[str, Any]:
     }
 
 
+def _search_cache_key(query_text: str, filter_skills: Optional[List[str]], min_experience: Optional[float], position_id: Optional[str], top_n: int) -> str:
+    payload = json.dumps({
+        "q": query_text.strip(), "skills": sorted(s.strip().lower() for s in (filter_skills or []) if s.strip()),
+        "min_exp": min_experience, "position_id": position_id, "top_n": top_n,
+    }, sort_keys=True)
+    return "search:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20) -> Dict[str, Any]:
     limit = max(1, min(top_n, settings.SEARCH_MAX_TOP_N))
+    cache_key = _search_cache_key(query_text, filter_skills, min_experience, position_id, limit)
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     active_skills = [s.strip() for s in (filter_skills or []) if s.strip()]
     target_position = db.query(Position).filter(Position.id == position_id).first() if position_id else None
 
@@ -114,7 +132,10 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     if min_experience is not None:
         candidates = [c for c in candidates if c.years_experience >= min_experience]
 
-    results = []
+    # Pass 1 (cheap, whole pool): deterministic scoring + Laya rerank signal. No LLM
+    # calls happen here, however large `candidates` is.
+    scored: List[Tuple[Candidate, float, Dict[str, Any], Optional[CandidateMatch]]] = []
+    laya_calls = 0
     for cand in candidates:
         fused_row = fused.get(cand.id, {"rrf": 0.0, "vector_score": 0.0, "lexical_score": 0.0})
         semantic = _semantic_score(fused_row)
@@ -126,26 +147,52 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
                 candidate_edu=cand.education or "", jd_title=target_position.title, jd_text=target_position.jd_text,
                 target_skills=jd_skills
             )
-            summary, quote, section = generate_match_summary(cand.extracted_skills or [], cand.years_experience, cand.education or "", target_position.title, target_position.jd_text, final_score)
+            blended_score, laya_signal = decision.rerank_score(final_score, cand, target_position)
+            if laya_signal:
+                laya_calls += 1
+                breakdown["laya_rerank"] = laya_signal
             match = db.query(CandidateMatch).filter(CandidateMatch.candidate_id == cand.id, CandidateMatch.position_id == target_position.id).first()
             if not match:
                 match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
                 db.add(match)
-            match.match_score = final_score; match.score_breakdown = breakdown; match.llm_summary = summary; match.cited_quote = quote; match.cited_section = section; match.jd_version = target_position.jd_version
-            score = final_score
+            match.match_score = blended_score; match.score_breakdown = breakdown; match.jd_version = target_position.jd_version
+            scored.append((cand, blended_score, breakdown, match))
         else:
             overlap, matched, missing = compute_skill_overlap(cand.extracted_skills or [], active_skills)
             # RRF is used for retrieval; semantic cosine is shown separately. When only lexical retrieval exists, score remains meaningful.
             score = round(((0.70 * retrieval_score) + (0.30 * overlap)) * 100, 1)
-            summary = f"Hybrid retrieval matched {len(matched)} requested skill(s)."
+            breakdown = {"final_score": score, "semantic_score": round(semantic * 100, 1), "retrieval_score": round(retrieval_score * 100, 1), "hybrid_rrf": round(fused_row.get("rrf", 0.0), 6), "lexical_score": round(fused_row.get("lexical_score", 0.0), 3), "lexical_normalized": round(lexical_norm * 100, 1), "matched_skills": matched, "missing_skills": missing}
+            scored.append((cand, score, breakdown, None))
+
+    scored.sort(key=lambda row: row[1], reverse=True)
+    top_slice = scored[:limit]
+
+    # Pass 2 (expensive, top_n only): LLM narrative generation + guardrails. This is
+    # the step that used to run once per candidate in the whole pool.
+    results = []
+    llm_calls = 0
+    for cand, score, breakdown, match in top_slice:
+        if target_position:
+            if decision.should_reuse_summary(match, target_position):
+                summary, quote, section = match.llm_summary, match.cited_quote, match.cited_section
+            else:
+                summary, quote, section = generate_match_summary(cand.extracted_skills or [], cand.years_experience, cand.education or "", target_position.title, target_position.jd_text, score)
+                llm_calls += 1
+                guard = check_search_result(quote, target_position.jd_text, summary)
+                if not guard.passed:
+                    safe_jd = redact_pii(target_position.jd_text)
+                    summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, safe_jd, target_position.title)
+                match.llm_summary = summary; match.cited_quote = quote; match.cited_section = section
+        else:
+            summary = f"Hybrid retrieval matched {len(breakdown.get('matched_skills', []))} requested skill(s)."
             quote = ""
             section = "Search"
-            breakdown = {"final_score": score, "semantic_score": round(semantic * 100, 1), "retrieval_score": round(retrieval_score * 100, 1), "hybrid_rrf": round(fused_row.get("rrf", 0.0), 6), "lexical_score": round(fused_row.get("lexical_score", 0.0), 3), "lexical_normalized": round(lexical_norm * 100, 1), "matched_skills": matched, "missing_skills": missing}
 
         results.append({"candidate": _candidate_payload(cand), "match_score": score, "score_breakdown": breakdown, "llm_summary": summary, "cited_quote": quote, "cited_section": section})
 
     db.commit() if target_position else None
-    results.sort(key=lambda x: x["match_score"], reverse=True)
-    return {"total_matches": len(results), "top_n": limit, "results": results[:limit],
+    response = {"total_matches": len(scored), "top_n": limit, "results": results,
             "scored_against_jd": ({"id": target_position.id, "title": target_position.title, "version": target_position.jd_version} if target_position else None),
-            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows)}}
+            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "laya_calls": laya_calls, "llm_calls": llm_calls}}
+    set_cache(cache_key, response, settings.CACHE_TTL_QUERY)
+    return response

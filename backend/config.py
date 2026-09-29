@@ -16,16 +16,15 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
-    # DGX/vLLM: OpenAI-compatible server. Example SSH tunnel:
-    # ssh -L 8000:localhost:8000 -L 6333:localhost:6333 truviq_domain@192.168.0.143
-    VLLM_BASE_URL: str = "http://localhost:8000/v1"
+    # DGX/vLLM: OpenAI-compatible server, reached directly over Tailscale.
+    VLLM_BASE_URL: str = "http://100.122.195.84:8000/v1"
     VLLM_API_KEY: Optional[str] = None
     VLLM_MODEL: Optional[str] = None
     VLLM_EMBEDDING_MODEL: Optional[str] = None
     VLLM_TIMEOUT: float = 120.0
 
-    # Proper vector database: Qdrant, normally exposed by the 6333 SSH tunnel.
-    QDRANT_URL: str = "http://localhost:6333"
+    # Proper vector database: Qdrant, same DGX host, reached over Tailscale.
+    QDRANT_URL: str = "http://100.122.195.84:6333"
     QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION: str = "truhire_candidate_vectors"
     QDRANT_DISTANCE: str = "Cosine"
@@ -40,6 +39,16 @@ class Settings(BaseSettings):
     EMBEDDING_PROVIDER: str = "vllm"
     EMBEDDING_MODEL: Optional[str] = None
     EMBEDDING_DIM: int = 768
+
+    # Laya: local non-autoregressive decision model (choice/score/noul), used as a fast
+    # judgment layer instead of an LLM call for reranking, chat intent/decisions, and
+    # guardrails. Falls back to the vLLM LLM path whenever Laya's own confidence is low
+    # (its "escalate" action) or when it's disabled/unavailable.
+    LAYA_ENABLED: bool = True
+    LAYA_MODEL: str = "convaiinnovations/laya"
+    LAYA_CONFIDENCE_THRESHOLD: float = 0.65
+    LAYA_RERANK_WEIGHT: float = 0.20
+    CACHE_TTL_DECISION: int = 3600
 
     INGEST_BATCH_SIZE: int = 50
     MAX_UPLOAD_MB: int = 15

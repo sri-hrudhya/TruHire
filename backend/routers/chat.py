@@ -6,6 +6,9 @@ from backend.database import get_db
 from backend.models import Candidate, Position, User, Conversation, ConversationMessage
 from backend.auth import get_current_user
 from backend.services.rag import build_candidate_context, build_jd_context, ask_rag_question
+from backend.services import decision
+from backend.services.guardrails import check_chat_reply
+from backend.services.laya_service import LayaUnavailable
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 class ChatMessage(BaseModel): role: str; content: str
@@ -43,10 +46,38 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
     else:
         context = "TruHire recruitment assistant. No specific candidate or JD was selected."; context_type = "general"
 
-    history = [{"role": m.role, "content": m.content} for m in conversation.messages]
-    reply = ask_rag_question(history, context)
+    # Pre-flight: classify the question with Laya before touching the LLM. Judgment-style
+    # questions ("should I interview this candidate") get answered directly from Laya's
+    # own typed decision when it's confident; anything else (or a low-confidence/escalated
+    # Laya call) falls back to the existing RAG chat path unchanged.
+    latest_user_message = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+    intent = decision.classify_chat_intent(latest_user_message) if latest_user_message else "open_qa"
+
+    reply = None
+    if intent == "interview_decision" and conversation.candidate_id:
+        jd_context = context
+        if cand.position_id:
+            linked_position = db.query(Position).filter(Position.id == cand.position_id).first()
+            if linked_position:
+                jd_context = build_jd_context(linked_position)
+        try:
+            laya_decision = decision.decide_interview(context, jd_context)
+            if not laya_decision.should_escalate:
+                verdict = "Yes" if laya_decision.answer else "No"
+                reply = f"{verdict}, interview this candidate (Laya confidence {laya_decision.probability:.0%})."
+        except LayaUnavailable:
+            pass
+
+    if reply is None:
+        history = [{"role": m.role, "content": m.content} for m in conversation.messages]
+        reply = ask_rag_question(history, context)
+
+    guard = check_chat_reply(reply, context)
+    if not guard.passed:
+        reply = "I can't confidently answer that from the available candidate/JD data — please review this one manually."
+
     db.add(ConversationMessage(conversation_id=conversation.id, role="assistant", content=reply)); db.commit()
-    return {"reply": reply, "context_type": context_type, "conversation_id": conversation.id}
+    return {"reply": reply, "context_type": context_type, "conversation_id": conversation.id, "intent": intent}
 
 @router.get("/conversations")
 def list_conversations(db: Session = Depends(get_db), user: User = Depends(get_current_user)):

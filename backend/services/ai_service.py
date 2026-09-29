@@ -49,6 +49,18 @@ def summarize_jd(title: str, jd_text: str) -> str:
         return f"Role: {title}\n\nOverview: {' '.join(lines[:3])[:500]}"
 
 
+def heuristic_match_summary(candidate_skills: List[str], candidate_exp: float, safe_jd: str, jd_title: str) -> Tuple[str, str, str]:
+    """Deterministic, no-LLM fallback summary/citation. Used when the LLM call fails
+    and when a guardrail check rejects an LLM-generated summary/quote as ungrounded."""
+    skills_text = ", ".join(candidate_skills[:5]) if candidate_skills else "relevant technical skills"
+    sentences = re.split(r"[.!?]\s+", safe_jd)
+    return (
+        f"Candidate has {candidate_exp} years of experience and relevant skills including {skills_text}.",
+        sentences[0][:180] if sentences else jd_title,
+        "Requirements"
+    )
+
+
 def generate_match_summary(candidate_skills: List[str], candidate_exp: float, candidate_edu: str, jd_title: str, jd_text: str, match_score: float) -> Tuple[str, str, str]:
     safe_jd = redact_pii(jd_text)
     prompt = f"""Candidate skills: {', '.join(candidate_skills) or 'None'}\nExperience: {candidate_exp}\nEducation: {candidate_edu}\nMatch score: {match_score:.1f}%\n\nJob Description ({jd_title}):\n{safe_jd[:5000]}\n\nReturn JSON only with keys summary, cited_quote, cited_section. Keep summary to two sentences and cited_quote short and verbatim from the JD."""
@@ -62,13 +74,7 @@ def generate_match_summary(candidate_skills: List[str], candidate_exp: float, ca
             return str(data.get("summary", "")), str(data.get("cited_quote", "")), str(data.get("cited_section", "Requirements"))
     except Exception as exc:
         print(f"vLLM match summary failed: {exc}")
-    skills_text = ", ".join(candidate_skills[:5]) if candidate_skills else "relevant technical skills"
-    sentences = re.split(r"[.!?]\s+", safe_jd)
-    return (
-        f"Candidate has {candidate_exp} years of experience and relevant skills including {skills_text}.",
-        sentences[0][:180] if sentences else jd_title,
-        "Requirements"
-    )
+    return heuristic_match_summary(candidate_skills, candidate_exp, safe_jd, jd_title)
 
 
 def answer_chat_query(messages: List[Dict[str, str]], context: str) -> str:
