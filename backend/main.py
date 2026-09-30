@@ -2,15 +2,22 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from backend.config import settings
 from backend.database import ensure_schema
-from backend.services.observability import ObservabilityMiddleware
-from backend.services.opensearch import init_opensearch_index
+from backend.rate_limit import limiter
+from backend.services.common.observability import ObservabilityMiddleware
+from backend.services.retrieval.opensearch import init_opensearch_index
 from backend.routers import auth, ingestion, job_descriptions, candidates, search, analytics, chat, export
 
 ensure_schema()
 Path(settings.STORAGE_DIR).mkdir(parents=True, exist_ok=True)
 app = FastAPI(title=settings.APP_NAME, description="Enterprise AI-powered Hiring Platform", version="2.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/uploads", StaticFiles(directory=settings.STORAGE_DIR), name="uploads")

@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from backend.config import settings
-from backend.services.cache import get_cache, set_cache
-from backend.services.laya_service import LayaUnavailable, ask_batch
+from backend.services.common.cache import get_cache, set_cache
+from backend.services.llm.laya_service import LayaUnavailable, ask_batch
 
 
 @dataclass
@@ -49,6 +49,17 @@ def check_chat_reply(reply: str, context: str) -> GuardrailResult:
     return GuardrailResult(grounded, safe, reason)
 
 
+def check_decision_reply(reply: str) -> GuardrailResult:
+    """
+    For a reply that's a judgment/decision statement (e.g. Laya's own direct
+    "should I interview this candidate" answer), not a claim extracted from context -
+    groundedness doesn't apply (there's no source text a decision needs to match
+    verbatim), only the safety/bias check does.
+    """
+    safe, safe_reason = _laya_safety(reply)
+    return GuardrailResult(True, safe, safe_reason)
+
+
 def _laya_groundedness(claim: str, source_text: str, summary: str) -> tuple[bool, str]:
     if not claim:
         return True, "no_claim_to_check"
@@ -63,8 +74,13 @@ def _laya_groundedness(claim: str, source_text: str, summary: str) -> tuple[bool
         )[0]
         result = (bool(decision.answer) or decision.probability >= 0.5, "laya_groundedness_check")
     except LayaUnavailable:
-        # Can't verify -> fail safe, don't silently trust an unverifiable claim.
-        result = (False, "laya_unavailable_fail_safe")
+        # Can't verify -> fail OPEN, same as _laya_safety below. Guardrails are a net
+        # on top of the primary LLM/RAG answer; their own unavailability must not
+        # silently break every chat reply and every search summary (it did: this used
+        # to fail closed, which rejected every single reply/summary for as long as
+        # Laya was uninstalled/unavailable, replacing working answers with the
+        # generic fallback message).
+        result = (True, "laya_unavailable_assume_grounded")
     set_cache(key, result, settings.CACHE_TTL_DECISION)
     return result
 

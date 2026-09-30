@@ -22,6 +22,8 @@ def ensure_schema():
                 conn.execute(text("ALTER TABLE candidates ADD COLUMN resume_text TEXT"))
             if "qdrant_point_id" not in cols:
                 conn.execute(text("ALTER TABLE candidates ADD COLUMN qdrant_point_id VARCHAR"))
+            if "pii_detected" not in cols:
+                conn.execute(text("ALTER TABLE candidates ADD COLUMN pii_detected TEXT"))
 
 
 def get_db():

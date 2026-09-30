@@ -76,10 +76,10 @@ export default function AnalyticsPage() {
       {/* Header & JD Filter */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          <h1 className="page-header-title">
             Talent Pool Analytics
           </h1>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+          <p className="page-header-subtitle">
             High-level telemetry, skill distributions, match scores, and recruitment conversion funnel.
           </p>
         </div>
@@ -106,55 +106,55 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Top 4 KPI Metrics */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem', marginBottom: '2rem' }}>
+      <div className="grid-4 mb-6" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem' }}>
         <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600 }}>Total Candidates</span>
+          <div className="flex items-center justify-between text-muted mb-2">
+            <span className="text-sm font-semibold">Total Candidates</span>
             <Users size={18} color="var(--primary)" />
           </div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          <div className="text-xl font-extrabold text-main">
             {summary.total_candidates?.toLocaleString() || 0}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '0.25rem' }}>
+          <div className="text-xs text-subtle mt-1">
             In shared candidate pool
           </div>
         </div>
 
         <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600 }}>Job Descriptions</span>
+          <div className="flex items-center justify-between text-muted mb-2">
+            <span className="text-sm font-semibold">Job Descriptions</span>
             <FileText size={18} color="var(--info)" />
           </div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          <div className="text-xl font-extrabold text-main">
             {summary.total_job_descriptions || 0}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '0.25rem' }}>
+          <div className="text-xs text-subtle mt-1">
             Active versioned specifications
           </div>
         </div>
 
         <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600 }}>Avg. Match Score</span>
+          <div className="flex items-center justify-between text-muted mb-2">
+            <span className="text-sm font-semibold">Avg. Match Score</span>
             <Award size={18} color="var(--success)" />
           </div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--success)' }}>
+          <div className="text-xl font-extrabold" style={{ color: 'var(--success)' }}>
             {summary.average_match_score ? `${summary.average_match_score}%` : 'N/A'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '0.25rem' }}>
+          <div className="text-xs text-subtle mt-1">
             Across {summary.evaluated_matches_count || 0} evaluated pairings
           </div>
         </div>
 
         <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600 }}>Ingestion Batches</span>
+          <div className="flex items-center justify-between text-muted mb-2">
+            <span className="text-sm font-semibold">Upload Sessions</span>
             <UploadCloud size={18} color="var(--warning)" />
           </div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          <div className="text-xl font-extrabold text-main">
             {summary.total_batches || 0}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '0.25rem' }}>
+          <div className="text-xs text-subtle mt-1">
             {summary.total_duplicate_files || 0} duplicates skipped
           </div>
         </div>

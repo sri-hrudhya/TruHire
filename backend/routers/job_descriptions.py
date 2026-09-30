@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import Position, User
 from backend.auth import get_current_user
-from backend.services.ai_service import summarize_jd
+from backend.services.llm.ai_service import summarize_jd
 
 router = APIRouter(tags=["job-descriptions"])
 class PositionCreateRequest(BaseModel): title: str; jd_text: str

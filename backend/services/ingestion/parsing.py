@@ -136,3 +136,39 @@ def heuristic_parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
         "education": education,
         "raw_text": raw_text
     }
+
+
+def parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
+    """
+    Resume field extraction: the regex heuristic above is the always-available
+    baseline (and its skill scan is a fast, deterministic dictionary match), upgraded
+    with LLM-based extraction when available. The LLM catches what regex structurally
+    can't: free-form skills outside COMMON_SKILLS (e.g. "Camunda", "BPMN"), section
+    headers wrongly picked up as names, and experience/education stated in prose
+    rather than a fixed pattern. Falls back to the heuristic result untouched if the
+    LLM call fails for any reason.
+    """
+    baseline = heuristic_parse_resume(raw_text, filename)
+    try:
+        from backend.services.llm.ai_service import llm_parse_resume
+        llm_result = llm_parse_resume(raw_text, filename)
+    except Exception as exc:
+        print(f"LLM resume parse unavailable: {exc}")
+        llm_result = None
+
+    if not llm_result:
+        return baseline
+
+    merged_skills = list(dict.fromkeys(
+        [s for s in llm_result["extracted_skills"] if s] + baseline["extracted_skills"]
+    ))
+
+    return {
+        "candidate_name": llm_result["candidate_name"] or baseline["candidate_name"],
+        "email": baseline["email"],
+        "phone": baseline["phone"],
+        "extracted_skills": merged_skills,
+        "years_experience": llm_result["years_experience"] if llm_result["years_experience"] > 0 else baseline["years_experience"],
+        "education": llm_result["education"] if llm_result["education"] != "Not Specified" else baseline["education"],
+        "raw_text": raw_text,
+    }

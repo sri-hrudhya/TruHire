@@ -59,6 +59,27 @@ def upsert_candidate(candidate_id: str, vector: List[float], payload: Dict[str, 
         response.raise_for_status()
 
 
+def upsert_candidates_batch(items: List[tuple]) -> None:
+    """Batched form of upsert_candidate: items is a list of
+    (candidate_id, vector, payload) tuples, upserted in one request instead of one
+    HTTP call per candidate. Used by bulk ingestion."""
+    if not items:
+        return
+    ensure_collection(len(items[0][1]))
+    body = {
+        "points": [
+            {"id": candidate_id, "vector": vector, "payload": payload}
+            for candidate_id, vector, payload in items
+        ]
+    }
+    with httpx.Client(timeout=60) as client:
+        response = client.put(
+            _url(f"/collections/{settings.QDRANT_COLLECTION}/points?wait=true"),
+            headers=_headers(), json=body
+        )
+        response.raise_for_status()
+
+
 def delete_candidate(candidate_id: str) -> None:
     if not collection_exists():
         return

@@ -72,31 +72,33 @@ export default function AIChatWindow({ isOpen, onClose, candidateId = null, posi
   };
 
   return (
-    <div style={{ position: 'fixed', bottom: '1.5rem', right: '1.5rem', width: '420px', height: '560px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', zIndex: 50, overflow: 'hidden' }} className="animate-fade-in">
-      <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg-surface)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <div style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Sparkles size={16} /></div>
+    <div className="chat-window animate-fade-in">
+      <div className="chat-header">
+        <div className="flex items-center gap-2">
+          <div className="chat-avatar"><Sparkles size={16} /></div>
           <div>
-            <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-main)' }}>{title}</div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>Persistent, RAG-grounded conversation</div>
+            <div className="text-sm font-bold text-main">{title}</div>
+            <div className="text-xs text-subtle">Persistent, RAG-grounded conversation</div>
           </div>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0.25rem', borderRadius: '4px' }}><X size={18} /></button>
+        <button onClick={onClose} className="icon-btn"><X size={18} /></button>
       </div>
-      <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="chat-body">
         {messages.map((msg, i) => {
           const isUser = msg.role === 'user';
-          return <div key={i} style={{ display: 'flex', gap: '0.625rem', alignSelf: isUser ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
-            {!isUser && <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '2px' }}><Bot size={14} /></div>}
-            <div style={{ padding: '0.75rem 1rem', borderRadius: '12px', fontSize: '0.875rem', lineHeight: 1.45, backgroundColor: isUser ? 'var(--primary)' : 'var(--bg-subtle)', color: isUser ? '#ffffff' : 'var(--text-main)', border: isUser ? 'none' : '1px solid var(--border-color)', whiteSpace: 'pre-wrap' }}>{msg.content}</div>
-          </div>;
+          return (
+            <div key={i} className={`chat-row ${isUser ? 'chat-row-user' : 'chat-row-assistant'}`}>
+              {!isUser && <div className="chat-avatar chat-avatar-sm"><Bot size={14} /></div>}
+              <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>{msg.content}</div>
+            </div>
+          );
         })}
-        {loading && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', color: 'var(--text-muted)', fontSize: '0.8125rem' }}><Sparkles size={14} className="animate-spin" /> Thinking...</div>}
+        {loading && <div className="flex items-center gap-2 text-muted text-sm"><Sparkles size={14} className="animate-spin" /> Thinking...</div>}
         <div ref={messagesEndRef} />
       </div>
-      <form onSubmit={handleSend} style={{ padding: '0.875rem 1rem', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-surface)', display: 'flex', gap: '0.5rem' }}>
-        <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask a question..." className="input-field" style={{ flex: 1, padding: '0.5rem 0.75rem', fontSize: '0.8125rem' }} />
-        <button type="submit" disabled={!input.trim() || loading} className="btn btn-primary" style={{ padding: '0.5rem 0.875rem' }}><Send size={15} /></button>
+      <form onSubmit={handleSend} className="chat-footer">
+        <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask a question..." className="input-field flex-1 text-sm" />
+        <button type="submit" disabled={!input.trim() || loading} className="btn btn-primary"><Send size={15} /></button>
       </form>
     </div>
   );

@@ -1,23 +1,48 @@
+import hashlib
 import re
 from typing import Dict, Any, List, Optional, Tuple
 from backend.config import settings
 
 
 def extract_skills_from_jd(jd_text: str) -> List[str]:
-    """Extract known skill keywords mentioned in JD text."""
-    from backend.services.parsing import COMMON_SKILLS
+    """
+    Extract required skills/tools mentioned in JD text. Tries free-form LLM extraction
+    first (not limited to any fixed dictionary, so niche/domain-specific requirements
+    aren't invisible to scoring), cached by JD content hash so the same JD text never
+    re-triggers the LLM call. Falls back to the regex/dictionary scan on any failure.
+    """
+    from backend.services.common.cache import get_cache, set_cache
+
+    cache_key = "jd_skills:" + hashlib.sha256(jd_text.encode("utf-8", "ignore")).hexdigest()
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
+    llm_skills = None
+    try:
+        from backend.services.llm.ai_service import llm_extract_jd_skills
+        llm_skills = llm_extract_jd_skills(jd_text)
+    except Exception as exc:
+        print(f"LLM JD skill extraction unavailable: {exc}")
+
+    if llm_skills:
+        set_cache(cache_key, llm_skills, settings.CACHE_TTL_DECISION)
+        return llm_skills
+
+    from backend.services.ingestion.parsing import COMMON_SKILLS
     found = []
     text_lower = jd_text.lower()
     for skill in COMMON_SKILLS:
         pattern = r'\b' + re.escape(skill.lower()) + r'\b'
         if re.search(pattern, text_lower):
             found.append(skill)
+    set_cache(cache_key, found, settings.CACHE_TTL_DECISION)
     return found
 
 
 def extract_required_experience(jd_text: str) -> float:
     """Extract stated required experience from JD text."""
-    from backend.services.parsing import YEARS_EXP_PATTERN
+    from backend.services.ingestion.parsing import YEARS_EXP_PATTERN
     matches = YEARS_EXP_PATTERN.findall(jd_text)
     if matches:
         nums = []

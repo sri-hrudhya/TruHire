@@ -202,29 +202,6 @@ def list_models(
     return models
 
 
-def vllm_health_check() -> bool:
-    """
-    Check whether the DGX vLLM server is reachable.
-    """
-
-    url = _vllm_base_url()
-
-    try:
-        with httpx.Client(
-            timeout=min(float(settings.VLLM_TIMEOUT), 10.0)
-        ) as client:
-
-            response = client.get(
-                f"{url}/models",
-                headers=_headers(_vllm_api_key()),
-            )
-
-            return response.status_code == 200
-
-    except httpx.HTTPError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Chat model
 # ---------------------------------------------------------------------------
@@ -314,58 +291,6 @@ def resolve_embedding_model() -> str:
         )
 
     return models[0]
-
-
-# ---------------------------------------------------------------------------
-# Embedding endpoint detection
-# ---------------------------------------------------------------------------
-
-def embedding_endpoint_available() -> bool:
-    """
-    Check whether the configured embedding server actually exposes
-    POST /v1/embeddings.
-
-    Important:
-    A GET request cannot reliably prove endpoint availability because
-    many OpenAI-compatible servers only implement POST.
-
-    Therefore we inspect the server's OpenAPI document when possible.
-    """
-
-    base_url = _embedding_base_url()
-
-    # Try OpenAPI first.
-    openapi_urls = [
-        base_url.rsplit("/v1", 1)[0] + "/openapi.json",
-        base_url + "/openapi.json",
-    ]
-
-    for openapi_url in openapi_urls:
-        try:
-            with httpx.Client(
-                timeout=10.0
-            ) as client:
-
-                response = client.get(openapi_url)
-
-                if response.status_code != 200:
-                    continue
-
-                spec = response.json()
-
-                paths = spec.get("paths", {})
-
-                if "/v1/embeddings" in paths:
-                    return True
-
-                if "/embeddings" in paths:
-                    return True
-
-        except Exception:
-            continue
-
-    # We cannot conclusively prove it exists.
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +432,36 @@ def generate_embedding(text: str) -> List[float]:
     return vector
 
 
+def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
+    """Embed many texts in one HTTP call (OpenAI-compatible /v1/embeddings accepts a
+    list for "input"). Used by bulk ingestion instead of one request per text."""
+    if not texts:
+        return []
+
+    base_url = _embedding_base_url()
+    model = resolve_embedding_model()
+    headers = _headers(_embedding_api_key())
+    endpoint = f"{base_url}/embeddings"
+
+    try:
+        with httpx.Client(timeout=settings.VLLM_TIMEOUT) as client:
+            response = client.post(endpoint, headers=headers, json={"model": model, "input": texts})
+    except httpx.ConnectError as exc:
+        raise RuntimeError(f"Embedding service is unreachable.\nEndpoint: {endpoint}") from exc
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Embedding batch request timed out.\nEndpoint: {endpoint}") from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Embedding HTTP request failed: {exc}") from exc
+
+    response.raise_for_status()
+    data = response.json().get("data") or []
+    if len(data) != len(texts):
+        raise RuntimeError(f"Embedding server returned {len(data)} vectors for {len(texts)} inputs.")
+
+    ordered = sorted(data, key=lambda item: item.get("index", 0))
+    return [[float(v) for v in item["embedding"]] for item in ordered]
+
+
 # ---------------------------------------------------------------------------
 # Chat completion
 # ---------------------------------------------------------------------------
@@ -516,9 +471,18 @@ def chat_completion(
     *,
     temperature: float = 0.2,
     max_tokens: int = 800,
+    enable_thinking: bool = True,
 ) -> str:
     """
     Generate a chat completion using the DGX Qwen model.
+
+    Qwen3-family "thinking" models emit a separate chain-of-thought (returned as
+    `message.reasoning`) that counts against `max_tokens` before the actual `content`
+    is produced. On longer prompts this can exhaust the token budget entirely, leaving
+    `content` empty with finish_reason="length" even though the request succeeded.
+    Pass enable_thinking=False for calls that need strict, structured output (JSON
+    extraction/scoring) - it skips the chain-of-thought, is faster and cheaper, and
+    avoids that failure mode.
     """
 
     if not messages:
@@ -534,6 +498,8 @@ def chat_completion(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if not enable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     base_url = _vllm_base_url()
     endpoint = f"{base_url}/chat/completions"
@@ -604,44 +570,3 @@ def chat_completion(
         return ""
 
     return str(content)
-
-
-# ---------------------------------------------------------------------------
-# Convenience diagnostics
-# ---------------------------------------------------------------------------
-
-def get_connection_info() -> Dict[str, Any]:
-    """
-    Return diagnostic information useful for debugging TruHire.
-    """
-
-    info: Dict[str, Any] = {
-        "vllm_base_url": _vllm_base_url(),
-        "vllm_model": getattr(settings, "VLLM_MODEL", None),
-        "embedding_base_url": _embedding_base_url(),
-        "embedding_model": getattr(
-            settings,
-            "VLLM_EMBEDDING_MODEL",
-            None,
-        ) or getattr(
-            settings,
-            "EMBEDDING_MODEL",
-            None,
-        ),
-    }
-
-    try:
-        info["vllm_models"] = list_models()
-    except Exception as exc:
-        info["vllm_models_error"] = str(exc)
-
-    if info["embedding_base_url"] != info["vllm_base_url"]:
-        try:
-            info["embedding_models"] = list_models(
-                base_url=info["embedding_base_url"],
-                api_key=_embedding_api_key(),
-            )
-        except Exception as exc:
-            info["embedding_models_error"] = str(exc)
-
-    return info

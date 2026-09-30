@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import Candidate, CandidateMatch, Position, User
 from backend.auth import get_current_user
-from backend.services.opensearch import delete_candidate as delete_lexical
-from backend.services.qdrant import delete_candidate as delete_vector
-from backend.services.cache import clear_cache
+from backend.services.retrieval.opensearch import delete_candidate as delete_lexical
+from backend.services.retrieval.qdrant import delete_candidate as delete_vector
+from backend.services.common.cache import clear_cache
 import os
 from pathlib import Path
 from backend.config import settings

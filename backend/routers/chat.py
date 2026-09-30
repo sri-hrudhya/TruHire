@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -5,10 +6,10 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import Candidate, Position, User, Conversation, ConversationMessage
 from backend.auth import get_current_user
-from backend.services.rag import build_candidate_context, build_jd_context, ask_rag_question
-from backend.services import decision
-from backend.services.guardrails import check_chat_reply
-from backend.services.laya_service import LayaUnavailable
+from backend.services.llm.rag import build_candidate_context, build_jd_context, ask_rag_question
+from backend.services.llm import decision
+from backend.services.llm.guardrails import check_chat_reply, check_decision_reply
+from backend.services.llm.laya_service import LayaUnavailable
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 class ChatMessage(BaseModel): role: str; content: str
@@ -36,7 +37,7 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
     else:
         for msg in req.messages:
             db.add(ConversationMessage(conversation_id=conversation.id, role=msg.role, content=msg.content))
-    conversation.updated_at = __import__("datetime").datetime.utcnow()
+    conversation.updated_at = datetime.utcnow()
     db.commit(); db.refresh(conversation)
 
     if conversation.candidate_id:
@@ -54,6 +55,7 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
     intent = decision.classify_chat_intent(latest_user_message) if latest_user_message else "open_qa"
 
     reply = None
+    is_laya_decision = False
     if intent == "interview_decision" and conversation.candidate_id:
         jd_context = context
         if cand.position_id:
@@ -65,6 +67,7 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
             if not laya_decision.should_escalate:
                 verdict = "Yes" if laya_decision.answer else "No"
                 reply = f"{verdict}, interview this candidate (Laya confidence {laya_decision.probability:.0%})."
+                is_laya_decision = True
         except LayaUnavailable:
             pass
 
@@ -72,7 +75,9 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
         history = [{"role": m.role, "content": m.content} for m in conversation.messages]
         reply = ask_rag_question(history, context)
 
-    guard = check_chat_reply(reply, context)
+    # A Laya-direct decision is a judgment statement, not a claim from context - only
+    # the safety check applies (see check_decision_reply's docstring).
+    guard = check_decision_reply(reply) if is_laya_decision else check_chat_reply(reply, context)
     if not guard.passed:
         reply = "I can't confidently answer that from the available candidate/JD data — please review this one manually."
 

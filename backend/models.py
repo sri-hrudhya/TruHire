@@ -60,6 +60,7 @@ class Candidate(Base):
     years_experience = Column(Float, default=0.0)
     education = Column(Text, nullable=True)
     resume_text = Column(Text, nullable=True)
+    pii_detected = Column(JSON, default=dict)
     status = Column(String, default="New", index=True)
     status_updated_by = Column(String, nullable=True)
     status_updated_at = Column(DateTime, nullable=True)

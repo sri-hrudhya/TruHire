@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, EmailStr, ConfigDict
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.database import get_db
 from backend.models import User
+from backend.rate_limit import limiter
 from backend.auth import (
     verify_password,
     get_password_hash,
@@ -40,7 +42,8 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+def register(request: Request, req: UserRegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == req.email.lower().strip()).first()
     if existing:
         raise HTTPException(
@@ -67,6 +70,7 @@ def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 async def login(request: Request, db: Session = Depends(get_db)):
     # Support both JSON payload and OAuth2 form-data
     content_type = request.headers.get("content-type", "")

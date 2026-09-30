@@ -5,18 +5,49 @@ from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.models import Candidate, Position, CandidateMatch
-from backend.services import decision
-from backend.services.ai_service import generate_embedding, generate_match_summary, heuristic_match_summary
-from backend.services.cache import get_cache, set_cache
-from backend.services.guardrails import check_search_result
-from backend.services.pii import redact_pii
-from backend.services.qdrant import search_vectors
-from backend.services.opensearch import search_lexical
-from backend.services.scoring import calculate_hybrid_score, extract_skills_from_jd, compute_skill_overlap
-from backend.services.parsing import COMMON_SKILLS, YEARS_EXP_PATTERN
+from backend.services.llm import decision
+from backend.services.llm.ai_service import generate_embedding, generate_match_summary, heuristic_match_summary
+from backend.services.common.cache import get_cache, set_cache
+from backend.services.llm.guardrails import check_search_result
+from backend.services.ingestion.pii import redact_pii
+from backend.services.retrieval.qdrant import search_vectors
+from backend.services.retrieval.opensearch import search_lexical
+from backend.services.retrieval.scoring import calculate_hybrid_score, extract_skills_from_jd, compute_skill_overlap
+from backend.services.ingestion.parsing import COMMON_SKILLS, YEARS_EXP_PATTERN
 
 MODIFIERS_APPEND = ["and", "also", "too", "plus", "with"]
 MODIFIERS_REPLACE = ["only", "just", "instead", "solely"]
+
+# Common query language that happens to be capitalized (sentence-initial or emphasis) -
+# excluded so the free-form skill-chip fallback below doesn't mistake it for a skill.
+QUERY_STOPWORDS = {
+    "looking", "need", "want", "show", "find", "search", "with", "and", "also",
+    "only", "just", "instead", "solely", "for", "experience", "years", "yrs",
+    "senior", "junior", "developer", "engineer", "candidate", "candidates", "role",
+}
+FREE_FORM_SKILL_PATTERN = re.compile(r'"([^"]{2,40})"|\b([A-Z][A-Za-z0-9+.#]{2,})\b')
+
+
+def _free_form_skill_chips(query_text: str, existing_skills: List[str]) -> List[str]:
+    """
+    Zero-latency, no-LLM fallback for skill mentions outside COMMON_SKILLS' fixed
+    dictionary (e.g. "Camunda", "BPMN", "SAP") - quoted phrases, ALL-CAPS acronyms, and
+    Title-Case words not already matched and not ordinary query language. Deliberately
+    regex-only: this runs on the live interactive search request path.
+    """
+    already = {s.lower() for s in existing_skills}
+    words = query_text.split()
+    first_word = words[0].strip(",.") if words else ""
+    found: List[str] = []
+    for quoted, bare in FREE_FORM_SKILL_PATTERN.findall(query_text):
+        token = (quoted or bare).strip()
+        if not token or token.lower() in already or token.lower() in QUERY_STOPWORDS:
+            continue
+        if not quoted and token == first_word:
+            continue
+        already.add(token.lower())
+        found.append(token)
+    return found
 
 
 def parse_search_query(query_text: str, existing_skills: Optional[List[str]] = None) -> Tuple[List[str], Optional[float], str, str]:
@@ -31,6 +62,7 @@ def parse_search_query(query_text: str, existing_skills: Optional[List[str]] = N
             if re.search(r"\b" + re.escape(word) + r"\b", text_lower):
                 modifier_mode = "append"; break
     found_skills = [skill for skill in COMMON_SKILLS if re.search(r"\b" + re.escape(skill.lower()) + r"\b", text_lower)]
+    found_skills += _free_form_skill_chips(query_text, existing_skills=found_skills)
     min_exp = None
     matches = YEARS_EXP_PATTERN.findall(query_text)
     if matches:
@@ -132,10 +164,9 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     if min_experience is not None:
         candidates = [c for c in candidates if c.years_experience >= min_experience]
 
-    # Pass 1 (cheap, whole pool): deterministic scoring + Laya rerank signal. No LLM
-    # calls happen here, however large `candidates` is.
-    scored: List[Tuple[Candidate, float, Dict[str, Any], Optional[CandidateMatch]]] = []
-    laya_calls = 0
+    # Pass 1a (cheap, whole pool): deterministic scoring only. No Laya/LLM calls happen
+    # here, however large `candidates` is.
+    deterministic: List[Tuple[Candidate, float, Dict[str, Any]]] = []
     for cand in candidates:
         fused_row = fused.get(cand.id, {"rrf": 0.0, "vector_score": 0.0, "lexical_score": 0.0})
         semantic = _semantic_score(fused_row)
@@ -147,22 +178,58 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
                 candidate_edu=cand.education or "", jd_title=target_position.title, jd_text=target_position.jd_text,
                 target_skills=jd_skills
             )
-            blended_score, laya_signal = decision.rerank_score(final_score, cand, target_position)
-            if laya_signal:
-                laya_calls += 1
-                breakdown["laya_rerank"] = laya_signal
-            match = db.query(CandidateMatch).filter(CandidateMatch.candidate_id == cand.id, CandidateMatch.position_id == target_position.id).first()
-            if not match:
-                match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
-                db.add(match)
-            match.match_score = blended_score; match.score_breakdown = breakdown; match.jd_version = target_position.jd_version
-            scored.append((cand, blended_score, breakdown, match))
         else:
             overlap, matched, missing = compute_skill_overlap(cand.extracted_skills or [], active_skills)
             # RRF is used for retrieval; semantic cosine is shown separately. When only lexical retrieval exists, score remains meaningful.
-            score = round(((0.70 * retrieval_score) + (0.30 * overlap)) * 100, 1)
-            breakdown = {"final_score": score, "semantic_score": round(semantic * 100, 1), "retrieval_score": round(retrieval_score * 100, 1), "hybrid_rrf": round(fused_row.get("rrf", 0.0), 6), "lexical_score": round(fused_row.get("lexical_score", 0.0), 3), "lexical_normalized": round(lexical_norm * 100, 1), "matched_skills": matched, "missing_skills": missing}
-            scored.append((cand, score, breakdown, None))
+            final_score = round(((0.70 * retrieval_score) + (0.30 * overlap)) * 100, 1)
+            breakdown = {"final_score": final_score, "semantic_score": round(semantic * 100, 1), "retrieval_score": round(retrieval_score * 100, 1), "hybrid_rrf": round(fused_row.get("rrf", 0.0), 6), "lexical_score": round(fused_row.get("lexical_score", 0.0), 3), "lexical_normalized": round(lexical_norm * 100, 1), "matched_skills": matched, "missing_skills": missing}
+        deterministic.append((cand, final_score, breakdown))
+
+    # Pass 1b (JD case only): one batched Laya call reranks a bounded shortlist near
+    # the top of the deterministic ranking - not the whole pool (which can be up to
+    # 500 candidates). Even batched, Laya measured ~0.4s/candidate on this CPU-only
+    # hardware (the model card's ~30-70ms figures assume a GPU); reranking the full
+    # pool could add tens of seconds to a single search for no benefit, since a
+    # candidate far outside the shortlist has no realistic path into top_n anyway.
+    scored: List[Tuple[Candidate, float, Dict[str, Any], Optional[CandidateMatch]]] = []
+    laya_calls = 0
+    if target_position:
+        deterministic.sort(key=lambda row: row[1], reverse=True)
+        shortlist_size = min(len(deterministic), max(limit * 2, settings.LAYA_RERANK_POOL_CAP))
+        shortlist, rest = deterministic[:shortlist_size], deterministic[shortlist_size:]
+
+        blended = decision.rerank_scores_batch([(score, cand, target_position) for cand, score, _ in shortlist])
+        reranked = [
+            (cand, blended_score, breakdown, laya_signal)
+            for (cand, _, breakdown), (blended_score, laya_signal) in zip(shortlist, blended)
+        ]
+        unranked = [(cand, score, breakdown, None) for cand, score, breakdown in rest]
+
+        # Bulk-fetch existing CandidateMatch rows once, instead of one query per
+        # candidate in the loop below (an N+1 query pattern - up to `candidate_limit`,
+        # i.e. up to 500, individual SELECTs per search otherwise).
+        all_pool_candidates = [cand for cand, *_ in reranked + unranked]
+        existing_matches = {
+            m.candidate_id: m
+            for m in db.query(CandidateMatch).filter(
+                CandidateMatch.candidate_id.in_([c.id for c in all_pool_candidates]),
+                CandidateMatch.position_id == target_position.id,
+            ).all()
+        }
+
+        for cand, final_score, breakdown, laya_signal in reranked + unranked:
+            if laya_signal:
+                laya_calls += 1
+                breakdown["laya_rerank"] = laya_signal
+            match = existing_matches.get(cand.id)
+            if not match:
+                match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
+                db.add(match)
+            # pyrefly: ignore [parse-error]
+            match.match_score = final_score; match.score_breakdown = breakdown; match.jd_version = target_position.jd_version
+            scored.append((cand, final_score, breakdown, match))
+    else:
+        scored = [(cand, score, breakdown, None) for cand, score, breakdown in deterministic]
 
     scored.sort(key=lambda row: row[1], reverse=True)
     top_slice = scored[:limit]
@@ -182,6 +249,7 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
                 if not guard.passed:
                     safe_jd = redact_pii(target_position.jd_text)
                     summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, safe_jd, target_position.title)
+                # pyrefly: ignore [parse-error]
                 match.llm_summary = summary; match.cited_quote = quote; match.cited_section = section
         else:
             summary = f"Hybrid retrieval matched {len(breakdown.get('matched_skills', []))} requested skill(s)."
@@ -196,3 +264,4 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
             "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "laya_calls": laya_calls, "llm_calls": llm_calls}}
     set_cache(cache_key, response, settings.CACHE_TTL_QUERY)
     return response
+    

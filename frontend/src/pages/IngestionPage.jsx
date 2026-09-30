@@ -1,14 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  UploadCloud, 
-  FileText, 
-  CheckCircle, 
-  AlertTriangle, 
-  Copy, 
-  RefreshCw, 
-  AlertCircle,
-  FileCheck,
-  Clock
+import {
+  UploadCloud,
+  FileText,
+  RefreshCw,
 } from 'lucide-react';
 import { ingestionApi } from '../lib/api';
 
@@ -16,43 +10,24 @@ export default function IngestionPage() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState(null);
-  const [activeBatchId, setActiveBatchId] = useState(null);
-  const [batches, setBatches] = useState([]);
-  const [selectedBatch, setSelectedBatch] = useState(null);
-  const [loadingBatches, setLoadingBatches] = useState(true);
+  const [activeUploadId, setActiveUploadId] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [dragActive, setDragActive] = useState(false);
 
   const fileInputRef = useRef(null);
 
-  const loadBatches = async () => {
-    try {
-      const res = await ingestionApi.getBatches();
-      setBatches(res.data.batches);
-      if (res.data.batches.length > 0 && !selectedBatch) {
-        setSelectedBatch(res.data.batches[0]);
-      }
-    } catch (err) {
-      console.error('Failed to load batches:', err);
-    } finally {
-      setLoadingBatches(false);
-    }
-  };
-
+  // Poll progress of the upload the user just kicked off - internally this is the
+  // backend's ingestion-batch tracking, but nothing about "batches" (IDs, history)
+  // is meaningful to a user, so it's surfaced only as "your upload's progress."
   useEffect(() => {
-    loadBatches();
-  }, []);
-
-  // Poll for active batch status updates
-  useEffect(() => {
-    if (!activeBatchId) return;
+    if (!activeUploadId) return;
 
     const interval = setInterval(async () => {
       try {
-        const res = await ingestionApi.getBatch(activeBatchId);
-        setSelectedBatch(res.data);
+        const res = await ingestionApi.getBatch(activeUploadId);
+        setUploadProgress(res.data);
         if (res.data.status === 'completed' || res.data.status === 'failed') {
-          setActiveBatchId(null);
-          loadBatches();
+          setActiveUploadId(null);
         }
       } catch (err) {
         console.error('Polling error:', err);
@@ -60,7 +35,7 @@ export default function IngestionPage() {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [activeBatchId]);
+  }, [activeUploadId]);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -101,13 +76,13 @@ export default function IngestionPage() {
     try {
       const res = await ingestionApi.uploadResumes(formData);
       setUploadMessage({ type: 'success', text: `Uploaded ${selectedFiles.length} file(s). Processing in background...` });
-      setActiveBatchId(res.data.batch_id);
+      setActiveUploadId(res.data.batch_id);
+      setUploadProgress({ status: 'processing', total_files: res.data.total_files, processed_count: 0, duplicate_count: 0, failed_count: 0, error_log: [] });
       setSelectedFiles([]);
-      loadBatches();
     } catch (err) {
       setUploadMessage({
         type: 'error',
-        text: err.response?.data?.detail || 'Failed to upload resume batch.'
+        text: err.response?.data?.detail || 'Failed to upload resumes.'
       });
     } finally {
       setIsUploading(false);
@@ -118,10 +93,10 @@ export default function IngestionPage() {
     <div className="page-body">
       {/* Title & Stats Overview */}
       <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+        <h1 className="page-header-title">
           Bulk Resume Ingestion
         </h1>
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+        <p className="page-header-subtitle">
           Upload candidates to the global shared talent pool. Automatic PII redaction, SHA-256 deduplication, and vector indexing.
         </p>
       </div>
@@ -179,7 +154,7 @@ export default function IngestionPage() {
                 Drag & drop resume files here, or <span style={{ color: 'var(--primary)', textDecoration: 'underline' }}>browse</span>
               </div>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '0.5rem' }}>
-                Supports PDF, TXT • Max 15 MB per file • Up to 50 files per batch
+                Supports PDF, TXT • Max 15 MB per file • Up to 50 files per upload
               </p>
             </div>
 
@@ -222,7 +197,7 @@ export default function IngestionPage() {
                   className="btn btn-primary"
                   style={{ width: '100%', marginTop: '1rem' }}
                 >
-                  {isUploading ? 'Uploading & Enqueueing...' : `Ingest ${selectedFiles.length} Resumes`}
+                  {isUploading ? 'Uploading...' : `Upload ${selectedFiles.length} Resumes`}
                 </button>
               </div>
             )}
@@ -249,48 +224,38 @@ export default function IngestionPage() {
             <ul style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', paddingLeft: '1.25rem', lineHeight: 1.6 }}>
               <li>Candidates are added directly to the shared global pool, not tied to any single position.</li>
               <li>Strict PII redaction runs prior to any embedding generation or LLM call.</li>
-              <li>SHA-256 hash checking prevents duplicate entries across batches.</li>
+              <li>SHA-256 hash checking prevents duplicate entries.</li>
             </ul>
           </div>
         </div>
 
-        {/* Right Column: Ingestion Batches & Live Telemetry */}
+        {/* Right Column: Live progress of the upload just kicked off */}
         <div>
           <div className="card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
               <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                Ingestion Batches
+                Upload Progress
               </h3>
-              <button
-                onClick={loadBatches}
-                className="btn btn-secondary"
-                style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
-              >
-                <RefreshCw size={13} /> Refresh
-              </button>
+              {activeUploadId && (
+                <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <RefreshCw size={12} /> Processing
+                </span>
+              )}
             </div>
 
-            {/* Selected batch status card */}
-            {selectedBatch ? (
+            {uploadProgress ? (
               <div style={{
                 padding: '1.25rem',
                 border: '1px solid var(--border-color)',
                 borderRadius: 'var(--radius-md)',
                 backgroundColor: 'var(--bg-surface)',
-                marginBottom: '1.5rem'
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>Batch ID</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', fontWeight: 600 }}>
-                      {selectedBatch.id}
-                    </div>
-                  </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
                   <span className={`badge ${
-                    selectedBatch.status === 'completed' ? 'badge-success' :
-                    selectedBatch.status === 'processing' ? 'badge-warning' : 'badge-danger'
+                    uploadProgress.status === 'completed' ? 'badge-success' :
+                    uploadProgress.status === 'processing' ? 'badge-warning' : 'badge-danger'
                   }`}>
-                    {selectedBatch.status}
+                    {uploadProgress.status}
                   </span>
                 </div>
 
@@ -299,8 +264,8 @@ export default function IngestionPage() {
                   <div
                     className="progress-bar-fill"
                     style={{
-                      width: selectedBatch.total_files > 0
-                        ? `${Math.min(100, Math.round(((selectedBatch.processed_count + selectedBatch.duplicate_count + selectedBatch.failed_count) / selectedBatch.total_files) * 100))}%`
+                      width: uploadProgress.total_files > 0
+                        ? `${Math.min(100, Math.round(((uploadProgress.processed_count + uploadProgress.duplicate_count + uploadProgress.failed_count) / uploadProgress.total_files) * 100))}%`
                         : '0%'
                     }}
                   />
@@ -310,27 +275,27 @@ export default function IngestionPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', textAlign: 'center' }}>
                   <div style={{ padding: '0.75rem 0.5rem', backgroundColor: 'var(--bg-subtle)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>Total</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>{selectedBatch.total_files}</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>{uploadProgress.total_files}</div>
                   </div>
                   <div style={{ padding: '0.75rem 0.5rem', backgroundColor: 'var(--success-bg)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--success-text)' }}>Processed</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--success-text)' }}>{selectedBatch.processed_count}</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--success-text)' }}>{uploadProgress.processed_count}</div>
                   </div>
                   <div style={{ padding: '0.75rem 0.5rem', backgroundColor: 'var(--warning-bg)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--warning-text)' }}>Duplicates</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--warning-text)' }}>{selectedBatch.duplicate_count}</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--warning-text)' }}>{uploadProgress.duplicate_count}</div>
                   </div>
                   <div style={{ padding: '0.75rem 0.5rem', backgroundColor: 'var(--danger-bg)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--danger-text)' }}>Failed</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--danger-text)' }}>{selectedBatch.failed_count}</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--danger-text)' }}>{uploadProgress.failed_count}</div>
                   </div>
                 </div>
 
                 {/* Per-file Error Log / Duplicates */}
-                {selectedBatch.error_log && selectedBatch.error_log.length > 0 && (
+                {uploadProgress.error_log && uploadProgress.error_log.length > 0 && (
                   <div style={{ marginTop: '1.25rem' }}>
                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>
-                      File Notice & Error Log ({selectedBatch.error_log.length})
+                      Notices ({uploadProgress.error_log.length})
                     </div>
                     <div style={{
                       maxHeight: '140px',
@@ -342,7 +307,7 @@ export default function IngestionPage() {
                       flexDirection: 'column',
                       gap: '0.35rem'
                     }}>
-                      {selectedBatch.error_log.map((err, i) => (
+                      {uploadProgress.error_log.map((err, i) => (
                         <div key={i} style={{ fontSize: '0.75rem', display: 'flex', gap: '0.5rem', color: 'var(--text-muted)' }}>
                           <span style={{ fontWeight: 600, color: 'var(--text-main)', flexShrink: 0 }}>{err.filename}:</span>
                           <span>{err.error}</span>
@@ -354,59 +319,9 @@ export default function IngestionPage() {
               </div>
             ) : (
               <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                No batches recorded yet.
+                Upload resumes to see progress here.
               </div>
             )}
-
-            {/* Historical Batches Table */}
-            <h4 style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase' }}>
-              Batch History
-            </h4>
-            <div className="table-container" style={{ maxHeight: '240px' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Batch</th>
-                    <th>Files</th>
-                    <th>Processed</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {batches.map((b) => (
-                    <tr
-                      key={b.id}
-                      onClick={() => setSelectedBatch(b)}
-                      style={{
-                        cursor: 'pointer',
-                        backgroundColor: selectedBatch?.id === b.id ? 'var(--bg-hover)' : undefined
-                      }}
-                    >
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-                        {b.id.substring(0, 8)}...
-                      </td>
-                      <td>{b.total_files}</td>
-                      <td>{b.processed_count}</td>
-                      <td>
-                        <span className={`badge ${
-                          b.status === 'completed' ? 'badge-success' :
-                          b.status === 'processing' ? 'badge-warning' : 'badge-danger'
-                        }`}>
-                          {b.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {batches.length === 0 && (
-                    <tr>
-                      <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-subtle)' }}>
-                        No batches available.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       </div>

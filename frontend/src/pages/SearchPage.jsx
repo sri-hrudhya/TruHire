@@ -13,7 +13,8 @@ import {
   CheckCircle,
   Clock,
   ArrowRight,
-  Download
+  Download,
+  FileSpreadsheet
 } from 'lucide-react';
 import { searchApi, jdApi, candidatesApi, exportApi } from '../lib/api';
 
@@ -30,6 +31,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
   const [modifierNotice, setModifierNotice] = useState(null);
+  const [exportingFormat, setExportingFormat] = useState(null);
 
   const hydratedRef = useRef(false);
 
@@ -144,28 +146,54 @@ export default function SearchPage() {
     }
   };
 
+  const handleExport = async (format = 'xlsx') => {
+    try {
+      setExportingFormat(format);
+      await exportApi.downloadCandidates(format, selectedJdId || null);
+    } catch (err) {
+      console.error('Export error:', err);
+      alert('Failed to export candidates. Please ensure you are logged in and try again.');
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
   return (
     <div className="page-body">
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          <h1 className="page-header-title">
             Candidate Search & Ranking
           </h1>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+          <p className="page-header-subtitle">
             Query the entire talent pool with natural language, modifier words, and optional JD scoring.
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <a
-            href={exportApi.getExportUrl('csv', selectedJdId || null)}
-            download
-            className="btn btn-secondary"
-            style={{ fontSize: '0.8125rem' }}
+        <div style={{ display: 'flex', gap: '0.625rem', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => handleExport('xlsx')}
+            disabled={exportingFormat !== null}
+            className="btn btn-primary"
+            style={{ fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            title="Download formatted Excel spreadsheet (.xlsx) with candidate profiles and match scores"
           >
-            <Download size={15} /> Export CSV
-          </a>
+            <FileSpreadsheet size={15} />
+            {exportingFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel (.xlsx)'}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleExport('csv')}
+            disabled={exportingFormat !== null}
+            className="btn btn-secondary"
+            style={{ fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            title="Download Excel-compatible CSV spreadsheet"
+          >
+            <Download size={15} />
+            {exportingFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}
+          </button>
         </div>
       </div>
 

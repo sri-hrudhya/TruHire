@@ -54,20 +54,43 @@ def init_opensearch_index() -> bool:
         return False
 
 
-def index_candidate(candidate_id: str, metadata: Dict[str, Any]) -> str:
-    client = get_opensearch_client()
-    if not client:
-        return candidate_id
-    init_opensearch_index()
-    doc = {
+def _candidate_doc(candidate_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    return {
         "candidate_id": candidate_id,
         "candidate_name": metadata.get("candidate_name", ""),
         "search_text": metadata.get("search_text", ""),
         "skills": metadata.get("skills", []),
         "years_experience": float(metadata.get("years_experience", 0.0)),
     }
+
+
+def index_candidate(candidate_id: str, metadata: Dict[str, Any]) -> str:
+    client = get_opensearch_client()
+    if not client:
+        return candidate_id
+    init_opensearch_index()
+    doc = _candidate_doc(candidate_id, metadata)
     res = client.index(index=settings.OPENSEARCH_INDEX, id=candidate_id, body=doc, refresh=True)
     return str(res["_id"])
+
+
+def index_candidates_batch(items: List[tuple]) -> None:
+    """Batched form of index_candidate: items is a list of (candidate_id, metadata)
+    tuples, indexed via the OpenSearch bulk API in one request instead of one HTTP
+    call per candidate. Used by bulk ingestion. No-ops (like index_candidate) if
+    OpenSearch is unreachable."""
+    if not items:
+        return
+    client = get_opensearch_client()
+    if not client:
+        return
+    init_opensearch_index()
+    from opensearchpy import helpers
+    actions = [
+        {"_index": settings.OPENSEARCH_INDEX, "_id": candidate_id, "_source": _candidate_doc(candidate_id, metadata)}
+        for candidate_id, metadata in items
+    ]
+    helpers.bulk(client, actions, refresh=True)
 
 
 def delete_candidate(candidate_id: str) -> None:

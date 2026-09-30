@@ -1,8 +1,8 @@
 from typing import List, Dict
 from sqlalchemy.orm import Session
 from backend.models import Candidate, Position, CandidateMatch
-from backend.services.pii import redact_pii
-from backend.services.ai_service import answer_chat_query
+from backend.services.ingestion.pii import redact_pii
+from backend.services.llm.ai_service import answer_chat_query
 
 
 def build_candidate_context(candidate: Candidate, db: Session) -> str:

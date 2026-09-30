@@ -83,11 +83,45 @@ export const chatApi = {
 };
 
 export const exportApi = {
-  getExportUrl: (format = 'csv', positionId = null, status = null) => {
+  getExportUrl: (format = 'xlsx', positionId = null, status = null) => {
+    const token = localStorage.getItem('truhire_token');
     let url = `/api/export/candidates?format=${format}`;
     if (positionId) url += `&position_id=${positionId}`;
     if (status) url += `&status=${status}`;
+    if (token) url += `&token=${encodeURIComponent(token)}`;
     return url;
+  },
+  downloadCandidates: async (format = 'xlsx', positionId = null, status = null) => {
+    const response = await api.get('/export/candidates', {
+      params: {
+        format,
+        position_id: positionId || undefined,
+        status: status || undefined,
+      },
+      responseType: 'blob',
+    });
+
+    let filename = format === 'csv' ? 'truhire_candidates.csv' : 'truhire_candidates.xlsx';
+    const disposition = response.headers['content-disposition'];
+    if (disposition && disposition.indexOf('filename=') !== -1) {
+      const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+      if (matches != null && matches[1]) {
+        filename = matches[1].replace(/['"]/g, '');
+      }
+    }
+
+    const contentType = response.headers['content-type'] || 
+      (format === 'csv' ? 'text/csv;charset=utf-8;' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const blob = new Blob([response.data], { type: contentType });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    return true;
   }
 };
 

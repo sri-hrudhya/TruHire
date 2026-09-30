@@ -112,10 +112,10 @@ export default function JobDescriptionsPage() {
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          <h1 className="page-header-title">
             Job Descriptions
           </h1>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+          <p className="page-header-subtitle">
             Define, version, and summarize job specifications. Used for candidate matching and scoring in Search.
           </p>
         </div>

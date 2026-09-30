@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from backend.database import get_db
 from backend.models import User, SearchState
 from backend.auth import get_current_user
-from backend.services.search import parse_search_query, execute_candidate_search
+from backend.services.retrieval.search import parse_search_query, execute_candidate_search
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 class SearchRequest(BaseModel):
