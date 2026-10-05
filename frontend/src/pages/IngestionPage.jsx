@@ -3,6 +3,7 @@ import {
   UploadCloud,
   FileText,
   RefreshCw,
+  Clock,
 } from 'lucide-react';
 import { ingestionApi } from '../lib/api';
 
@@ -92,13 +93,29 @@ export default function IngestionPage() {
   return (
     <div className="page-body">
       {/* Title & Stats Overview */}
-      <div style={{ marginBottom: '2rem' }}>
-        <h1 className="page-header-title">
-          Bulk Resume Ingestion
-        </h1>
-        <p className="page-header-subtitle">
-          Upload candidates to the global shared talent pool. Automatic PII redaction, SHA-256 deduplication, and vector indexing.
-        </p>
+      <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <h1 className="page-header-title" style={{ margin: 0 }}>
+            Bulk Resume Ingestion
+          </h1>
+          <p className="page-header-subtitle" style={{ marginTop: '0.35rem' }}>
+            Upload candidates to the global shared talent pool. Automatic PII redaction, SHA-256 deduplication, and vector indexing.
+          </p>
+        </div>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.4rem',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          backgroundColor: 'var(--bg-subtle)',
+          color: 'var(--text-muted)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '20px',
+          padding: '0.3rem 0.75rem'
+        }}>
+          <Clock size={13} color="var(--primary)" />
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>

@@ -180,16 +180,22 @@ async def upload_resumes(request: Request, background_tasks: BackgroundTasks, fi
     batch = IngestionBatch(created_by=current_user.id, total_files=len(files_data), status="processing", error_log=[])
     db.add(batch); db.commit(); db.refresh(batch)
 
-    if settings.REDIS_URL:
-        # Production mode: enqueue to the arq worker (backend/worker.py), a separate
-        # process, so ingestion no longer competes with request handling.
-        from arq import create_pool
-        from arq.connections import RedisSettings
-        pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-        await pool.enqueue_job("process_batch_job", batch.id, files_data, current_user.id)
-        await pool.close()
-    else:
-        # Default local-dev mode: unchanged from before, no extra infra required.
+    enqueued = False
+    if settings.USE_ARQ_QUEUE:
+        try:
+            from arq import create_pool
+            pool = await create_pool(settings.get_arq_redis_settings())
+            await pool.enqueue_job("process_batch_job", batch.id, files_data, current_user.id)
+            if hasattr(pool, "aclose"):
+                await pool.aclose()
+            else:
+                await pool.close()
+            enqueued = True
+        except Exception as exc:
+            print(f"Arq enqueue failed, falling back to BackgroundTasks: {exc}")
+
+    if not enqueued:
+        # Default local-dev mode (or fallback): zero extra infra required
         background_tasks.add_task(process_batch, batch.id, files_data, current_user.id)
 
     return {"batch_id": batch.id, "status": "processing", "total_files": len(files_data), "message": "Resume batch upload accepted and queued."}

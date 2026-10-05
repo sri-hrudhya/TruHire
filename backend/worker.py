@@ -24,4 +24,4 @@ async def process_batch_job(ctx, batch_id: str, files_data: list, user_id: str) 
 
 class WorkerSettings:
     functions = [process_batch_job]
-    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL) if settings.REDIS_URL else RedisSettings()
+    redis_settings = settings.get_arq_redis_settings()

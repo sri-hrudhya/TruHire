@@ -94,13 +94,24 @@ def index_candidates_batch(items: List[tuple]) -> None:
 
 
 def delete_candidate(candidate_id: str) -> None:
+    delete_candidates_batch([candidate_id])
+
+
+def delete_candidates_batch(candidate_ids: List[str]) -> None:
+    if not candidate_ids:
+        return
     client = get_opensearch_client()
     if not client:
         return
     try:
-        client.delete(index=settings.OPENSEARCH_INDEX, id=candidate_id, refresh=True)
-    except Exception:
-        pass
+        from opensearchpy import helpers
+        actions = [
+            {"_op_type": "delete", "_index": settings.OPENSEARCH_INDEX, "_id": cid}
+            for cid in candidate_ids
+        ]
+        helpers.bulk(client, actions, refresh=True, ignore_status=[404])
+    except Exception as exc:
+        print(f"OpenSearch batch delete note: {exc}")
 
 
 def search_lexical(query_text: str, top_k: int = 50, filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None) -> List[Dict[str, Any]]:

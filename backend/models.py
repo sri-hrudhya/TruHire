@@ -29,6 +29,8 @@ class Position(Base):
     jd_version = Column(Integer, default=1, nullable=False)
     created_by = Column(String, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    file_url = Column(String, nullable=True)
+    original_filename = Column(String, nullable=True)
     creator = relationship("User", back_populates="positions")
     matches = relationship("CandidateMatch", back_populates="position", cascade="all, delete-orphan")
 

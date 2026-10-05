@@ -71,6 +71,23 @@ class Settings(BaseSettings):
     INGEST_BATCH_SIZE: int = 50
     MAX_UPLOAD_MB: int = 15
     STORAGE_DIR: str = "./uploads"
+    RESUME_STORAGE_DIR: str = "./uploads/resumes"
+    JD_STORAGE_DIR: str = "./uploads/job_descriptions"
+
+    # Data Retention (in days, generic, loaded from .env)
+    # Resumes, chunks/embeddings, and JD information will be stored only for this duration
+    DATA_RETENTION_DAYS: int = 30
+    RESUME_RETENTION_DAYS: Optional[int] = None
+    JD_RETENTION_DAYS: Optional[int] = None
+    RETENTION_CLEANUP_INTERVAL_HOURS: int = 24
+
+    @property
+    def effective_resume_retention_days(self) -> int:
+        return self.RESUME_RETENTION_DAYS if self.RESUME_RETENTION_DAYS is not None else self.DATA_RETENTION_DAYS
+
+    @property
+    def effective_jd_retention_days(self) -> int:
+        return self.JD_RETENTION_DAYS if self.JD_RETENTION_DAYS is not None else self.DATA_RETENTION_DAYS
 
     SEARCH_MAX_TOP_N: int = 100
     HYBRID_VECTOR_WEIGHT: float = 0.60
@@ -85,11 +102,44 @@ class Settings(BaseSettings):
     EDUCATION_PENALTY: float = 0.05
 
     ANALYTICS_TOP_SKILLS: int = 20
-    CACHE_TTL_QUERY: int = 30
+    CACHE_TTL_QUERY: int = 60
+    CACHE_TTL_SESSION: int = 86400  # 24 hours for user authentication sessions
 
-    # Optional: enables the arq-backed production ingestion queue when set. Left unset,
-    # ingestion uses FastAPI BackgroundTasks (today's behavior, zero extra infra).
+    # Redis connection settings
     REDIS_URL: Optional[str] = None
+    REDIS_HOST: Optional[str] = "127.0.0.1"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: Optional[str] = None
+
+    USE_ARQ_QUEUE: bool = False
+
+    @property
+    def effective_redis_url(self) -> Optional[str]:
+        if self.REDIS_URL and self.REDIS_URL.strip():
+            return self.REDIS_URL.strip()
+        if self.REDIS_HOST and self.REDIS_PASSWORD:
+            from urllib.parse import quote_plus
+            return f"redis://:{quote_plus(self.REDIS_PASSWORD)}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+        elif self.REDIS_HOST:
+            return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+        return None
+
+    def get_arq_redis_settings(self):
+        """Returns arq RedisSettings with unquoted password to avoid authentication failure."""
+        from arq.connections import RedisSettings
+        from urllib.parse import unquote
+        if self.REDIS_PASSWORD and self.REDIS_HOST:
+            return RedisSettings(
+                host=self.REDIS_HOST,
+                port=self.REDIS_PORT,
+                password=self.REDIS_PASSWORD,
+            )
+        if self.effective_redis_url:
+            rs = RedisSettings.from_dsn(self.effective_redis_url)
+            if rs.password:
+                rs.password = unquote(rs.password)
+            return rs
+        return RedisSettings()
 
     # Rate limiting (slowapi/limits syntax: "<count>/<second|minute|hour|day>").
     RATE_LIMIT_AUTH: str = "5/minute"

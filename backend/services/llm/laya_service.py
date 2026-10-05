@@ -15,7 +15,7 @@ installed `laya` package's own schema - `_to_laya_question`/`_to_decision` are t
 places that need to change if that schema changes again.
 """
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from backend.config import settings
 
@@ -41,6 +41,35 @@ class LayaDecision:
     raw: Dict[str, Any]
 
 
+import os
+import warnings
+
+# Suppress Hugging Face symlinks warning on Windows and temperature calibration warnings
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+warnings.filterwarnings("ignore", message=".*laya: this checkpoint ships invalid temperatures.*")
+
+
+def _find_local_laya_dir() -> Optional[str]:
+    """Finds existing local snapshot directory for convaiinnovations/laya."""
+    custom_path = getattr(settings, "LAYA_MODEL_PATH", None)
+    if custom_path and os.path.exists(custom_path):
+        return custom_path
+
+    hf_cache = os.path.expanduser("~/.cache/huggingface/hub/models--convaiinnovations--laya/snapshots")
+    if os.path.exists(hf_cache):
+        snapshots = [
+            os.path.join(hf_cache, s)
+            for s in os.listdir(hf_cache)
+            if os.path.isdir(os.path.join(hf_cache, s))
+        ]
+        # Sort by modification time to get the most recent snapshot
+        snapshots.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for snap_dir in snapshots:
+            if os.path.isfile(os.path.join(snap_dir, "model.safetensors")):
+                return snap_dir
+    return None
+
+
 def _get_router():
     global _router, _load_attempted
     if _router is not None:
@@ -50,9 +79,25 @@ def _get_router():
     if _load_attempted:
         raise LayaUnavailable("Laya failed to load on a previous attempt.")
     _load_attempted = True
+
     try:
         from laya import Router
-        _router = Router(preload=True)
+
+        local_dir = _find_local_laya_dir()
+        if local_dir:
+            # Checkpoint is already downloaded on disk; enforce offline mode
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            print(f"[laya] Using local checkpoint at {local_dir} (zero network downloads)")
+            models = {
+                "english": (local_dir, None),
+                "multilingual": (local_dir, "multilingual"),
+                "typed-decisions": (local_dir, "typed-decisions"),
+            }
+            # max_loaded=3 ensures models remain cached in memory and are not evicted/reloaded
+            _router = Router(models=models, max_loaded=3, preload=False)
+        else:
+            # Fallback if no local snapshot exists yet
+            _router = Router(max_loaded=3, preload=False)
     except Exception as exc:
         raise LayaUnavailable(f"Laya could not be loaded: {exc}") from exc
     return _router

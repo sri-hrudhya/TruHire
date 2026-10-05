@@ -53,6 +53,20 @@ export const jdApi = {
   create: (data) => api.post('/job-descriptions', data),
   update: (id, data) => api.put(`/job-descriptions/${id}`, data),
   summarize: (id) => api.post(`/job-descriptions/${id}/summarize`),
+  upload: (formData) => api.post('/job-descriptions/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+  extractText: (formData) => api.post('/job-descriptions/extract-text', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+};
+
+export const retentionApi = {
+  getStatus: () => api.get('/retention/status'),
+  cleanup: (retentionDays = null) => {
+    const url = retentionDays ? `/retention/cleanup?retention_days=${retentionDays}` : '/retention/cleanup';
+    return api.post(url);
+  },
 };
 
 export const candidatesApi = {

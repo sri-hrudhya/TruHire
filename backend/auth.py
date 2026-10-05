@@ -53,8 +53,30 @@ def get_current_user(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-        
+
+    # Check Redis session cache first to eliminate DB round-trips
+    from backend.services.common.cache import get_cached_user_session, cache_user_session
+    cached_dict = get_cached_user_session(user_id)
+    if cached_dict:
+        try:
+            cached_user = User(
+                id=cached_dict["id"],
+                email=cached_dict["email"],
+                name=cached_dict["name"],
+                hashed_password=cached_dict["hashed_password"],
+            )
+            return db.merge(cached_user, load=False)
+        except Exception:
+            pass
+
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exception
+
+    cache_user_session(user_id, {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "hashed_password": user.hashed_password,
+    })
     return user

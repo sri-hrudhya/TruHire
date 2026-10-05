@@ -16,7 +16,9 @@ def ensure_schema():
     Base.metadata.create_all(bind=engine)
     if settings.DATABASE_URL.startswith("sqlite"):
         inspector = inspect(engine)
-        cols = {c["name"] for c in inspector.get_columns("candidates")} if "candidates" in inspector.get_table_names() else set()
+        table_names = inspector.get_table_names()
+        cols = {c["name"] for c in inspector.get_columns("candidates")} if "candidates" in table_names else set()
+        pos_cols = {c["name"] for c in inspector.get_columns("positions")} if "positions" in table_names else set()
         with engine.begin() as conn:
             if "resume_text" not in cols:
                 conn.execute(text("ALTER TABLE candidates ADD COLUMN resume_text TEXT"))
@@ -24,6 +26,10 @@ def ensure_schema():
                 conn.execute(text("ALTER TABLE candidates ADD COLUMN qdrant_point_id VARCHAR"))
             if "pii_detected" not in cols:
                 conn.execute(text("ALTER TABLE candidates ADD COLUMN pii_detected TEXT"))
+            if "file_url" not in pos_cols:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN file_url VARCHAR"))
+            if "original_filename" not in pos_cols:
+                conn.execute(text("ALTER TABLE positions ADD COLUMN original_filename VARCHAR"))
 
 
 def get_db():

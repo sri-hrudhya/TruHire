@@ -81,15 +81,22 @@ def upsert_candidates_batch(items: List[tuple]) -> None:
 
 
 def delete_candidate(candidate_id: str) -> None:
-    if not collection_exists():
+    delete_candidates_batch([candidate_id])
+
+
+def delete_candidates_batch(candidate_ids: List[str]) -> None:
+    if not candidate_ids or not collection_exists():
         return
-    body = {"points": [candidate_id]}
-    with httpx.Client(timeout=15) as client:
-        response = client.post(
-            _url(f"/collections/{settings.QDRANT_COLLECTION}/points/delete?wait=true"),
-            headers=_headers(), json=body
-        )
-        response.raise_for_status()
+    body = {"points": candidate_ids}
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                _url(f"/collections/{settings.QDRANT_COLLECTION}/points/delete?wait=true"),
+                headers=_headers(), json=body
+            )
+            response.raise_for_status()
+    except Exception as exc:
+        print(f"Qdrant batch delete points note: {exc}")
 
 
 def search_vectors(query_vector: List[float], top_k: int = 20) -> List[Dict[str, Any]]:
