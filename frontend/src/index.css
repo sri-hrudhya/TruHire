@@ -17,8 +17,6 @@
   --primary-border: #bfdbfe;
   
   --border-color: #e2e8f0;
-  --border-subtle: #f1f5f9;
-  --border-strong: #cbd5e1;
   
   --success: #10b981;
   --success-bg: #ecfdf5;
@@ -34,7 +32,6 @@
   
   --info: #0ea5e9;
   --info-bg: #f0f9ff;
-  --info-text: #0369a1;
 
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
@@ -66,8 +63,6 @@
   --primary-border: rgba(59, 130, 246, 0.3);
   
   --border-color: #232e47;
-  --border-subtle: #1c263d;
-  --border-strong: #334155;
   
   --success: #34d399;
   --success-bg: rgba(16, 185, 129, 0.12);
@@ -83,7 +78,6 @@
   
   --info: #38bdf8;
   --info-bg: rgba(14, 165, 233, 0.12);
-  --info-text: #7dd3fc;
 
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
@@ -424,10 +418,6 @@ button, input, select, textarea {
   background-color: var(--bg-hover);
 }
 
-.btn-danger {
-  background-color: var(--danger);
-  color: #ffffff;
-}
 
 .badge {
   display: inline-flex;
@@ -570,30 +560,18 @@ button, input, select, textarea {
 
 /* Layout utilities - reduce ad hoc inline style={{}} for common patterns */
 .flex { display: flex; }
-.flex-col { display: flex; flex-direction: column; }
 .items-center { align-items: center; }
-.items-start { align-items: flex-start; }
 .justify-between { justify-content: space-between; }
-.justify-center { justify-content: center; }
 .flex-1 { flex: 1; }
-.flex-wrap { flex-wrap: wrap; }
 
-.gap-1 { gap: 0.25rem; }
 .gap-2 { gap: 0.5rem; }
-.gap-3 { gap: 0.75rem; }
 .gap-4 { gap: 1rem; }
-.gap-6 { gap: 1.5rem; }
 
 .mt-1 { margin-top: 0.25rem; }
-.mt-2 { margin-top: 0.5rem; }
-.mt-4 { margin-top: 1rem; }
-.mt-6 { margin-top: 1.5rem; }
 .mb-2 { margin-bottom: 0.5rem; }
-.mb-4 { margin-bottom: 1rem; }
 .mb-6 { margin-bottom: 2rem; }
 
 .grid { display: grid; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; }
 
 .text-sm { font-size: 0.8125rem; }
@@ -608,14 +586,7 @@ button, input, select, textarea {
 .text-subtle { color: var(--text-subtle); }
 .uppercase { text-transform: uppercase; letter-spacing: 0.05em; }
 
-.w-full { width: 100%; }
-.text-center { text-align: center; }
 .rounded { border-radius: var(--radius-sm); }
-.stat-tile {
-  padding: 0.75rem 0.5rem;
-  border-radius: 6px;
-  text-align: center;
-}
 
 /* Animations */
 @keyframes fadeIn {

@@ -10,3 +10,6 @@ truhire.db
 uploads/
 Camunda-resumes/
 command.md
+.claude/
+.pytest_cache/
+.venv/

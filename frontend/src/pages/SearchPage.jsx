@@ -1,22 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { 
-  Search, 
-  X, 
-  Sparkles, 
-  Filter, 
-  Briefcase, 
-  ChevronDown, 
-  ChevronUp, 
-  Quote, 
-  User, 
-  CheckCircle,
-  Clock,
+import {
+  Search,
+  X,
+  Sparkles,
+  Filter,
+  Briefcase,
+  ChevronDown,
+  ChevronUp,
+  Quote,
   ArrowRight,
   Download,
-  FileSpreadsheet
+  FileSpreadsheet,
+  FileText
 } from 'lucide-react';
 import { searchApi, jdApi, candidatesApi, exportApi } from '../lib/api';
+import ResumePreviewModal from '../components/ResumePreviewModal';
 
 export default function SearchPage() {
   const [query, setQuery] = useState('');
@@ -24,6 +23,8 @@ export default function SearchPage() {
   const [minExp, setMinExp] = useState('');
   const [selectedJdId, setSelectedJdId] = useState('');
   const [topN, setTopN] = useState(20);
+  const [previewCandidate, setPreviewCandidate] = useState(null);
+  const [isResumeOpen, setIsResumeOpen] = useState(false);
 
   // Options & Data
   const [jds, setJds] = useState([]);
@@ -54,23 +55,20 @@ export default function SearchPage() {
             top_n: state.top_n || 20,
             results: state.results || [],
             retrieval: state.retrieval || {},
-            scored_against_jd: state.position_id ? { id: state.position_id, title: (jdRes.data.find(j => j.id === state.position_id)?.title || 'Selected JD'), version: (jdRes.data.find(j => j.id === state.position_id)?.jd_version || '') } : null,
+            scored_against_jd: state.position_id ? { id: state.position_id, title: (jdRes.data.find(j => j.id === state.position_id)?.title || 'Selected Requirement'), version: (jdRes.data.find(j => j.id === state.position_id)?.jd_version || '') } : null,
             active_filter_chips: state.filter_skills || [],
             min_experience: state.min_experience ?? null,
             query: state.query || ''
           });
-        } else {
-          await handleSearch();
         }
+        // No saved requirement: stay empty. Candidates are never ranked without a requirement.
       } catch (err) {
         console.error('Failed to restore persistent search state:', err);
-        try { await handleSearch(); } catch (_) {}
       } finally {
         hydratedRef.current = true;
       }
     };
     restoreSearch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSearch = async (overrideChips = null, overrideJd = null) => {
@@ -79,6 +77,11 @@ export default function SearchPage() {
 
     const activeSkills = overrideChips !== null ? overrideChips : filterChips;
     const activeJd = overrideJd !== null ? overrideJd : selectedJdId;
+    if (!activeJd) {
+      setSearchResults(null);
+      setLoading(false);
+      return;
+    }
 
     try {
       const res = await searchApi.search({
@@ -118,8 +121,9 @@ export default function SearchPage() {
     setFilterChips([]);
     setMinExp('');
     setSelectedJdId('');
+    setSearchResults(null);
+    setModifierNotice(null);
     try { await searchApi.clearState(); } catch (err) { console.error('Failed to clear saved search state:', err); }
-    handleSearch([], '');
   };
 
   const handleStatusChange = async (candidateId, newStatus) => {
@@ -167,7 +171,7 @@ export default function SearchPage() {
             Candidate Search & Ranking
           </h1>
           <p className="page-header-subtitle">
-            Query the entire talent pool with natural language, modifier words, and optional JD scoring.
+            Select a requirement to rank candidates against it, then refine with natural language, skills and experience.
           </p>
         </div>
 
@@ -214,9 +218,10 @@ export default function SearchPage() {
           </div>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !selectedJdId}
             className="btn btn-primary"
             style={{ padding: '0 1.5rem', minWidth: '120px' }}
+            title={selectedJdId ? undefined : 'Select a requirement first'}
           >
             {loading ? 'Searching...' : 'Search'}
           </button>
@@ -231,10 +236,10 @@ export default function SearchPage() {
           paddingTop: '0.5rem',
           borderTop: '1px solid var(--border-color)'
         }}>
-          {/* Select JD to score results against */}
+          {/* Select Requirement to score results against */}
           <div>
             <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Briefcase size={13} /> Score Against Job Description (Optional)
+              <Briefcase size={13} /> Requirement (required)
             </label>
             <select
               value={selectedJdId}
@@ -245,10 +250,10 @@ export default function SearchPage() {
               className="input-field"
               style={{ fontSize: '0.8125rem', padding: '0.5rem 0.75rem' }}
             >
-              <option value="">No JD (Rank by query/skills alone)</option>
+              <option value="" disabled>Select a requirement…</option>
               {jds.map(jd => (
                 <option key={jd.id} value={jd.id}>
-                  {jd.title} (v{jd.jd_version})
+                  {jd.display_id ? `${jd.display_id} • ` : ''}{jd.title} (v{jd.jd_version})
                 </option>
               ))}
             </select>
@@ -342,7 +347,7 @@ export default function SearchPage() {
               )}
             </span>
           ) : (
-            'Enter a query or select a JD to view ranked candidates'
+            'Select a requirement to view ranked candidates'
           )}
         </div>
 
@@ -352,7 +357,15 @@ export default function SearchPage() {
       </div>
 
       {/* Results List */}
-      {loading ? (
+      {!selectedJdId && !loading ? (
+        <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
+          <Briefcase size={32} color="var(--text-subtle)" style={{ margin: '0 auto 1rem' }} />
+          <div style={{ fontSize: '1rem', fontWeight: 700 }}>Select a requirement to see matching candidates</div>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+            Candidates are only ranked and scored against a specific requirement.
+          </p>
+        </div>
+      ) : loading ? (
         <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
           <Sparkles size={32} className="animate-spin" color="var(--primary)" style={{ margin: '0 auto 1rem' }} />
           <div style={{ fontSize: '1rem', fontWeight: 700 }}>Calculating Semantic & Skill Matches...</div>
@@ -399,7 +412,20 @@ export default function SearchPage() {
                     </div>
 
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap' }}>
+                        {cand.display_id && (
+                          <span
+                            className="badge badge-primary"
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.75rem',
+                              fontWeight: 800,
+                              padding: '0.15rem 0.45rem'
+                            }}
+                          >
+                            {cand.display_id}
+                          </span>
+                        )}
                         <Link
                           to={`/candidates/${cand.id}`}
                           style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--text-main)', textDecoration: 'none' }}
@@ -422,7 +448,7 @@ export default function SearchPage() {
                   </div>
 
                   {/* Right: Actions & Status selector */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <select
                       value={cand.status}
                       onChange={(e) => handleStatusChange(cand.id, e.target.value)}
@@ -440,6 +466,20 @@ export default function SearchPage() {
                       <option value="Interviewed">Status: Interviewed</option>
                       <option value="Rejected">Status: Rejected</option>
                     </select>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewCandidate(cand);
+                        setIsResumeOpen(true);
+                      }}
+                      className="btn btn-secondary"
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                      title="Preview candidate resume"
+                    >
+                      <FileText size={13} color="var(--primary)" />
+                      <span>View Resume</span>
+                    </button>
 
                     <button
                       type="button"
@@ -550,7 +590,7 @@ export default function SearchPage() {
                           <Quote size={16} color="var(--primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div>
                             <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--primary)' }}>
-                              Cited from JD ({item.cited_section || 'Requirements'}):
+                              Cited from Requirement ({item.cited_section || 'Requirements'}):
                             </div>
                             <div style={{ fontSize: '0.8125rem', fontStyle: 'italic', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
                               "{item.cited_quote}"
@@ -570,6 +610,16 @@ export default function SearchPage() {
           No candidates found matching your active filters. Try removing keywords or reducing minimum experience.
         </div>
       )}
+
+      {/* Resume Preview Modal */}
+      <ResumePreviewModal
+        isOpen={isResumeOpen}
+        onClose={() => {
+          setIsResumeOpen(false);
+          setPreviewCandidate(null);
+        }}
+        candidate={previewCandidate}
+      />
     </div>
   );
 }

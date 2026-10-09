@@ -30,11 +30,11 @@ with fewer, cheaper calls to a large language model.
 
 ```
 frontend (React + Vite)
-        │  /api, /uploads
+        │  /api
         ▼
 backend (FastAPI)
         │
-        ├── SQL database            — users, candidates, positions, matches, chat history
+        ├── PostgreSQL              — users, candidates, requirements, matches, chat, email, AI audit trail
         ├── Qdrant                  — candidate embedding vectors (semantic search)
         ├── OpenSearch              — lexical/BM25 index (keyword search)
         ├── LLM inference endpoint  — OpenAI-compatible chat + embeddings
@@ -48,7 +48,8 @@ have available.
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.13+ (managed with `uv`)
+- PostgreSQL 14+
 - Node.js 18+
 - A running Qdrant instance
 - A running OpenSearch instance (optional — used for lexical retrieval)
@@ -61,14 +62,15 @@ have available.
 Copy the example environment file and fill in your own values:
 
 ```bash
-cp .env.example backend/.env
+cp .env.example .env   # repository root; settings are read from the working directory
 ```
 
 At minimum, set:
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | SQL database connection string (defaults to local SQLite) |
+| `DATABASE_URL` | PostgreSQL URL, e.g. `postgresql+psycopg://user:pass@localhost:5432/truhire` (URL-encode `@` in passwords as `%40`) |
+| `SECRET_KEY` | JWT signing key — set a long random value |
 | `VLLM_BASE_URL` | Your OpenAI-compatible LLM/embedding endpoint |
 | `VLLM_MODEL` | The chat/generation model served at that endpoint |
 | `VLLM_EMBEDDING_MODEL` | The embedding model served at that endpoint (must be a real embedding model, not a chat-only model) |
@@ -84,13 +86,19 @@ inference and vector infrastructure actually runs.
 From the repository root (imports are rooted here, not inside `backend/`):
 
 ```bash
-cd backend
-python -m venv .venv
-.venv/Scripts/activate   # or: source .venv/bin/activate on macOS/Linux
-pip install -r requirements.txt
-cd ..
-uvicorn backend.main:app --reload --host 0.0.0.0 --port <your-chosen-port>
+uv sync                      # or: python -m venv .venv && pip install -r requirements.txt
+uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port <your-chosen-port>
 ```
+
+Tables are created on first start. To move an existing SQLite database
+(`truhire.db`) into PostgreSQL, run once:
+
+```bash
+uv run python -m backend.scripts.migrate_sqlite_to_postgres --source sqlite:///./truhire.db
+```
+
+It copies every table in one transaction and verifies row counts; the SQLite
+file is left untouched.
 
 Health check: `GET /api/health`.
 
@@ -102,17 +110,38 @@ npm install
 npm run dev
 ```
 
-The frontend proxies `/api` and `/uploads` to the backend — make sure the
+The frontend proxies `/api` to the backend — make sure the
 backend port matches the proxy target configured in `frontend/vite.config.js`.
 
 ### 4. Index existing resumes
 
 If you change the embedding model or the Qdrant collection, re-embed existing
-candidates:
+candidates (runs in the background, returns 202):
 
 ```
-POST /api/ingest/reindex-embeddings
+POST /api/ingest/reindex                     # everything
+POST /api/ingest/reindex?missing_only=true   # only resumes missing from the indexes
 ```
+
+Uploaded resumes and requirement files are never served statically; they are
+streamed to logged-in users via `GET /api/candidates/{id}/resume` and
+`GET /api/job-descriptions/{id}/file`.
+
+### 5. AI governance
+
+- **Guardrails** (`GUARDRAILS_ENFORCE=true`): search summaries, chat replies, JD
+  summaries and candidate emails are checked for groundedness and safety; output
+  that can't be verified (including when Laya is unavailable) is replaced by a
+  deterministic fallback or blocked. Emails can't contain links or contact
+  details that aren't in the requirement or company settings.
+- **Prompt-injection screening**: resumes with hidden (white, tiny, invisible,
+  off-page) or embedded instructions aimed at an AI are rejected at upload.
+  Re-screen stored resumes with
+  `uv run python -m backend.scripts.scan_resume_injections` (dry run; add
+  `--delete` to remove flagged candidates).
+- **AI audit trail**: every LLM/Laya call, guardrail verdict and screening
+  decision is recorded (PII-redacted previews, tokens, latency, user, trace id)
+  and visible on the Analytics page / `GET /api/ai-audit`.
 
 ## The Decision Layer
 
@@ -147,4 +176,4 @@ frontend/
   running and that its port matches `frontend/vite.config.js`'s proxy target.
 - **Stale or incompatible vectors after changing the embedding model** — use a
   fresh Qdrant collection (or clear the existing one) and run
-  `POST /api/ingest/reindex-embeddings`.
+  `POST /api/ingest/reindex`.

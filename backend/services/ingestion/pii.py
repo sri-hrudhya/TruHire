@@ -9,7 +9,6 @@ ADDRESS_REGEX = re.compile(
     r'\b\d{1,5}\s+[A-Za-z0-9\.\s]{2,25}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Circle|Cir|Terrace|Ter|Parkway|Pkwy|Place|Pl|Square|Sq)\b',
     re.IGNORECASE
 )
-POSTAL_CODE_REGEX = re.compile(r'\b\d{5}(?:-\d{4})?\b')
 
 
 def detect_pii(text: str) -> Dict[str, List[str]]:

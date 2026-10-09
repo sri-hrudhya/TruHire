@@ -2,7 +2,6 @@ import json
 import pickle
 import time
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import quote_plus
 import redis
 
 from backend.config import settings
@@ -162,29 +161,3 @@ def cache_user_session(user_id: str, user_dict: dict, ttl_seconds: Optional[int]
 def get_cached_user_session(user_id: str) -> Optional[dict]:
     """Retrieves user session data from Redis."""
     return get_cache(f"truhire:session:user:{user_id}")
-
-
-def invalidate_user_session(user_id: str):
-    """Invalidates cached session upon logout or user update."""
-    delete_cache(f"truhire:session:user:{user_id}")
-
-
-# ============================================================
-# Site & Query Caching (Search, JDs, Candidate matches)
-# ============================================================
-
-def cache_site_data(namespace: str, key: str, data: Any, ttl_seconds: Optional[int] = None):
-    """Caches general site and API query responses."""
-    ttl = ttl_seconds or settings.CACHE_TTL_QUERY
-    set_cache(f"truhire:site:{namespace}:{key}", data, ttl_seconds=ttl)
-
-
-def get_cached_site_data(namespace: str, key: str) -> Optional[Any]:
-    """Retrieves cached site/query response."""
-    return get_cache(f"truhire:site:{namespace}:{key}")
-
-
-def invalidate_site_cache(namespace: Optional[str] = None):
-    """Invalidates site cache for a namespace or globally."""
-    prefix = f"truhire:site:{namespace}:" if namespace else "truhire:site:"
-    clear_cache(prefix=prefix)

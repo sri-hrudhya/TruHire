@@ -1,4 +1,3 @@
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, EmailStr, ConfigDict
 from sqlalchemy.orm import Session
@@ -20,11 +19,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class UserRegisterRequest(BaseModel):
     email: EmailStr
     name: str
-    password: str
-
-
-class UserLoginRequest(BaseModel):
-    email: str
     password: str
 
 

@@ -14,10 +14,12 @@ Everything below this module's public functions uses an app-level question shape
 installed `laya` package's own schema - `_to_laya_question`/`_to_decision` are the only
 places that need to change if that schema changes again.
 """
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from backend.config import settings
+from backend.services.common import ai_audit
 
 _router = None
 _load_attempted = False
@@ -154,14 +156,26 @@ def ask_batch(state: str, questions: List[Dict[str, Any]]) -> List[LayaDecision]
     "options": [...] (choice only), "criteria": str (optional guidance), "scale": str
     (score only, default "1-5")}.
     """
-    router = _get_router()
-    laya_questions = {q["id"]: _to_laya_question(q) for q in questions}
+    question_text = " | ".join(q["question"] for q in questions)
+    started = time.perf_counter()
     try:
-        result = router.predict(state, laya_questions)
+        router = _get_router()
+        result = router.predict(state, {q["id"]: _to_laya_question(q) for q in questions})
     except Exception as exc:
+        ai_audit.record(provider="laya", status="error", prompt=f"{question_text}\n\n{state}",
+                        latency_ms=(time.perf_counter() - started) * 1000, error=str(exc))
+        if isinstance(exc, LayaUnavailable):
+            raise
         raise LayaUnavailable(f"Laya inference failed: {exc}") from exc
     answers = result.get("answers", {})
-    return [_to_decision(answers.get(q["id"], {})) for q in questions]
+    decisions = [_to_decision(answers.get(q["id"], {})) for q in questions]
+    ai_audit.record(
+        provider="laya", prompt=f"{question_text}\n\n{state}",
+        output="; ".join(f"{q['id']}={d.answer} (p={d.probability:.2f})" for q, d in zip(questions, decisions)),
+        latency_ms=(time.perf_counter() - started) * 1000,
+        details={"escalate": [d.should_escalate for d in decisions]},
+    )
+    return decisions
 
 
 def ask_choice(state: str, question: str, options: List[str], criteria: str = "") -> LayaDecision:
@@ -171,11 +185,6 @@ def ask_choice(state: str, question: str, options: List[str], criteria: str = ""
 
 def ask_yesno(state: str, question: str, criteria: str = "") -> LayaDecision:
     q = {"id": "q", "type": "noul", "question": question, "criteria": criteria}
-    return ask_batch(state, [q])[0]
-
-
-def ask_score(state: str, question: str, scale: str = "1-5") -> LayaDecision:
-    q = {"id": "q", "type": "score", "question": question, "scale": scale}
     return ask_batch(state, [q])[0]
 
 
@@ -189,11 +198,22 @@ def ask_score_batch(states: List[str], question: str, scale: str = "1-5") -> Lis
     """
     if not states:
         return []
-    router = _get_router()
-    laya_question = _to_laya_question({"id": "q", "type": "score", "question": question, "scale": scale})
-    requests = [{"state": state, "questions": {"q": laya_question}} for state in states]
+    started = time.perf_counter()
     try:
-        results = router.predict_batch(requests)
+        router = _get_router()
+        laya_question = _to_laya_question({"id": "q", "type": "score", "question": question, "scale": scale})
+        results = router.predict_batch([{"state": state, "questions": {"q": laya_question}} for state in states])
     except Exception as exc:
+        ai_audit.record(provider="laya", status="error", prompt=question,
+                        latency_ms=(time.perf_counter() - started) * 1000, error=str(exc), details={"batch_size": len(states)})
+        if isinstance(exc, LayaUnavailable):
+            raise
         raise LayaUnavailable(f"Laya batch inference failed: {exc}") from exc
-    return [_to_decision((result.get("answers") or {}).get("q", {})) for result in results]
+    decisions = [_to_decision((result.get("answers") or {}).get("q", {})) for result in results]
+    # One event per batch: per-candidate state would duplicate resume content into the trail.
+    ai_audit.record(
+        provider="laya", prompt=question,
+        output=", ".join(f"{d.answer:.2f}" if isinstance(d.answer, float) else str(d.answer) for d in decisions),
+        latency_ms=(time.perf_counter() - started) * 1000, details={"batch_size": len(states)},
+    )
+    return decisions

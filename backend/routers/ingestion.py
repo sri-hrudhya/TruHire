@@ -4,11 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.database import get_db, SessionLocal
-from backend.models import User, Candidate, IngestionBatch
+from backend.models import User, Candidate, IngestionBatch, get_next_candidate_display_id
 from backend.auth import get_current_user
 from backend.rate_limit import limiter
+from backend.services.common import ai_audit
+from backend.services.common.cache import clear_cache
 from backend.services.ingestion.storage import save_upload_file, compute_file_hash
 from backend.services.ingestion.parsing import extract_text_from_file, parse_resume
+from backend.services.ingestion.injection_screen import screen_resume
 from backend.services.ingestion.pii import detect_pii, redact_pii
 from backend.services.llm.ai_service import generate_embedding, generate_embeddings_batch
 from backend.services.retrieval.opensearch import index_candidate, index_candidates_batch
@@ -28,66 +31,6 @@ def index_candidate_documents(candidate: Candidate, raw_text: str) -> None:
     candidate.qdrant_point_id = candidate.id
 
 
-@router.post("/reindex-embeddings")
-def reindex_embeddings(db=Depends(get_db), user: User = Depends(get_current_user)):
-    """Rebuild every candidate vector from the configured DGX/vLLM embedding model.
-
-    This is intentionally explicit: embedding model/dimension changes must not silently
-    mix vectors from different models in the same Qdrant collection.
-    """
-    candidates = db.query(Candidate).all()
-    processed = 0
-    for candidate in candidates:
-        raw_text = candidate.resume_text or ""
-        if not raw_text.strip():
-            continue
-        index_candidate_documents(candidate, raw_text)
-        processed += 1
-    db.commit()
-    embedding_model = settings.LOCAL_EMBEDDING_MODEL if settings.EMBEDDING_PROVIDER == "local" else (settings.VLLM_EMBEDDING_MODEL or settings.EMBEDDING_MODEL)
-    return {"reindexed": processed, "total_candidates": len(candidates), "embedding_provider": settings.EMBEDDING_PROVIDER, "embedding_model": embedding_model}
-
-
-def process_single_file(file_bytes: bytes, original_filename: str, batch_id: str, user_id: str, db: Session):
-    file_hash = compute_file_hash(file_bytes)
-    existing = db.query(Candidate).filter(Candidate.file_hash == file_hash).first()
-    if existing: return "duplicate", f"Skipped exact duplicate of candidate '{existing.candidate_name}' (ID: {existing.id})"
-    file_url, _ = save_upload_file(original_filename, file_bytes)
-    raw_text = extract_text_from_file(original_filename, file_bytes)
-    if not raw_text.strip(): return "failed", f"Failed to extract readable text from '{original_filename}'"
-    parsed = parse_resume(raw_text, original_filename)
-    pii_found = detect_pii(raw_text)
-    pii_detected = {category: len(matches) for category, matches in pii_found.items()}
-    candidate = Candidate(position_id=None, resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, status="New", uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, file_hash=file_hash, original_filename=original_filename)
-    db.add(candidate); db.flush()
-    index_candidate_documents(candidate, raw_text)
-    db.commit()
-    return "processed", None
-
-
-def run_batch_ingestion_task(batch_id: str, files_data: List[tuple], user_id: str):
-    """Legacy one-file-at-a-time path (embedding/upsert/index per resume). Kept for
-    reference/comparison; process_batch() below is what upload_resumes actually uses."""
-    db = SessionLocal()
-    try:
-        batch = db.query(IngestionBatch).filter(IngestionBatch.id == batch_id).first()
-        if not batch: return
-        processed = failed = duplicates = 0; errors = []
-        for filename, file_bytes in files_data:
-            try:
-                outcome, detail = process_single_file(file_bytes, filename, batch_id, user_id, db)
-                if outcome == "processed": processed += 1
-                elif outcome == "duplicate": duplicates += 1; errors.append({"filename": filename, "error": detail})
-                else: failed += 1; errors.append({"filename": filename, "error": detail})
-            except Exception as exc:
-                db.rollback(); failed += 1; errors.append({"filename": filename, "error": str(exc)})
-            batch.processed_count = processed; batch.failed_count = failed; batch.duplicate_count = duplicates; batch.error_log = errors; db.commit()
-        batch.status = "completed" if processed or duplicates else "failed"; db.commit()
-    except Exception as exc:
-        db.rollback(); print(f"Batch {batch_id} failed: {exc}")
-    finally: db.close()
-
-
 def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
     """
     The real ingestion path (used by both the default BackgroundTasks path and the
@@ -97,6 +40,8 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
     embedding generation, Qdrant upsert, OpenSearch indexing - runs ONCE for the whole
     batch instead of once per resume.
     """
+    # Runs outside the request (BackgroundTasks or the arq worker), so attribute AI calls explicitly.
+    ai_audit.set_user(user_id)
     db = SessionLocal()
     try:
         batch = db.query(IngestionBatch).filter(IngestionBatch.id == batch_id).first()
@@ -115,16 +60,27 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
                     duplicates += 1
                     errors.append({"filename": filename, "error": f"Skipped exact duplicate of candidate '{existing.candidate_name}' (ID: {existing.id})"})
                 else:
-                    file_url, _ = save_upload_file(filename, file_bytes)
                     raw_text = extract_text_from_file(filename, file_bytes)
+                    screen = screen_resume(filename, file_bytes, raw_text) if raw_text.strip() else None
                     if not raw_text.strip():
                         failed += 1
                         errors.append({"filename": filename, "error": f"Failed to extract readable text from '{filename}'"})
+                    elif screen.blocked:
+                        # Rejected before anything is stored, parsed by the LLM or indexed.
+                        failed += 1
+                        errors.append({"filename": filename, "error": f"Rejected: resume contains hidden or embedded AI instructions ({screen.summary()})"})
+                        ai_audit.record(provider="injection_screen", feature="resume_screen", status="blocked", prompt=raw_text,
+                                        output=screen.hidden_text, details={"filename": filename, "reasons": screen.reasons, "batch_id": batch_id})
                     else:
+                        if screen.borderline:
+                            ai_audit.record(provider="injection_screen", feature="resume_screen", status="ok", prompt=raw_text,
+                                            details={"filename": filename, "reasons": screen.reasons, "batch_id": batch_id})
+                        file_url, _ = save_upload_file(filename, file_bytes)
                         parsed = parse_resume(raw_text, filename)
                         pii_found = detect_pii(raw_text)
                         pii_detected = {category: len(matches) for category, matches in pii_found.items()}
-                        candidate = Candidate(position_id=None, resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, status="New", uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, file_hash=file_hash, original_filename=filename)
+                        display_id = get_next_candidate_display_id(db)
+                        candidate = Candidate(display_id=display_id, position_id=None, resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, status="New", uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, file_hash=file_hash, original_filename=filename)
                         db.add(candidate); db.flush()
                         safe = redact_pii(raw_text, candidate_name=candidate.candidate_name)
                         profile_text = f"Name: {candidate.candidate_name}\nSkills: {', '.join(candidate.extracted_skills or [])}\nExperience: {candidate.years_experience}\nEducation: {candidate.education or ''}\nResume: {safe}"
@@ -149,10 +105,13 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
                     payload = {"candidate_id": candidate.id, "candidate_name": candidate.candidate_name, "skills": candidate.extracted_skills or [], "years_experience": candidate.years_experience, "filename": candidate.original_filename}
                     qdrant_items.append((candidate.id, vector, payload))
                     opensearch_items.append((candidate.id, {**payload, "search_text": profile_text}))
-                    candidate.qdrant_point_id = candidate.id
-                    candidate.opensearch_doc_id = candidate.id
                 upsert_candidates_batch(qdrant_items)
                 index_candidates_batch(opensearch_items)
+                # Only mark as indexed once both writes succeeded, so a failed batch stays
+                # discoverable via POST /api/ingest/reindex?missing_only=true.
+                for candidate, _ in prepared:
+                    candidate.qdrant_point_id = candidate.id
+                    candidate.opensearch_doc_id = candidate.id
                 processed = len(prepared)
             except Exception as exc:
                 failed += len(prepared)
@@ -161,6 +120,9 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
 
         batch.status = "completed" if processed or duplicates else "failed"
         db.commit()
+        clear_cache("candidates:list:")
+        clear_cache("requirements:matches:")
+        clear_cache("search:")
     except Exception as exc:
         db.rollback(); print(f"Batch {batch_id} failed: {exc}")
     finally:
@@ -214,17 +176,39 @@ def get_batch_status(batch_id: str, db: Session = Depends(get_db), current_user:
     return batch
 
 
-@router.post("/reindex")
-def reindex_all_candidates(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    candidates = db.query(Candidate).all()
-    def task(ids):
-        session = SessionLocal()
-        try:
-            for cid in ids:
-                c = session.query(Candidate).filter(Candidate.id == cid).first()
-                if c and c.resume_text:
-                    index_candidate_documents(c, c.resume_text); session.commit()
-        finally: session.close()
-    ids = [c.id for c in candidates]
-    background_tasks.add_task(task, ids)
-    return {"status": "reindexing", "total_candidates": len(ids), "message": "Existing resumes are being re-embedded into Qdrant and re-indexed in OpenSearch."}
+def _reindex_task(candidate_ids: List[str], user_id: str) -> None:
+    ai_audit.set_user(user_id)
+    session = SessionLocal()
+    try:
+        for cid in candidate_ids:
+            candidate = session.get(Candidate, cid)
+            if not candidate or not (candidate.resume_text or "").strip():
+                continue
+            try:
+                index_candidate_documents(candidate, candidate.resume_text)
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                print(f"Reindex failed for candidate {cid}: {exc}")
+    finally:
+        session.close()
+        clear_cache("requirements:matches:")
+        clear_cache("search:")
+
+
+@router.post("/reindex", status_code=202)
+def reindex_candidates(background_tasks: BackgroundTasks, missing_only: bool = False, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Re-embed resumes into Qdrant and re-index them in OpenSearch, in the background.
+
+    missing_only=true covers just the candidates that never reached the indexes (e.g. an
+    interrupted batch); they are otherwise invisible to requirement matching. A full run is
+    needed after changing the embedding model, so vectors from different models never mix.
+    """
+    query = db.query(Candidate.id)
+    if missing_only:
+        query = query.filter(Candidate.qdrant_point_id.is_(None))
+    ids = [row[0] for row in query.all()]
+    background_tasks.add_task(_reindex_task, ids, current_user.id)
+    embedding_model = settings.LOCAL_EMBEDDING_MODEL if settings.EMBEDDING_PROVIDER == "local" else (settings.VLLM_EMBEDDING_MODEL or settings.EMBEDDING_MODEL)
+    return {"status": "reindexing", "total_candidates": len(ids), "missing_only": missing_only,
+            "embedding_provider": settings.EMBEDDING_PROVIDER, "embedding_model": embedding_model}

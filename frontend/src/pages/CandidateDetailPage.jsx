@@ -1,21 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { 
-  User, 
-  Mail, 
-  Phone, 
-  GraduationCap, 
-  Briefcase, 
-  Calendar, 
-  FileText, 
-  Sparkles, 
-  ArrowLeft,
-  Quote,
-  CheckCircle2,
-  AlertCircle
+import {
+  Mail,
+  Phone,
+  GraduationCap,
+  Briefcase,
+  FileText,
+  Sparkles,
+  ArrowLeft
 } from 'lucide-react';
 import { candidatesApi } from '../lib/api';
 import AIChatWindow from '../components/AIChatWindow';
+import ResumePreviewModal from '../components/ResumePreviewModal';
 
 export default function CandidateDetailPage() {
   const { id } = useParams();
@@ -23,6 +19,7 @@ export default function CandidateDetailPage() {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isResumeOpen, setIsResumeOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
 
   useEffect(() => {
@@ -120,11 +117,22 @@ export default function CandidateDetailPage() {
             </div>
 
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-main)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <span
+                  className="badge badge-primary"
+                  style={{
+                    fontSize: '0.8125rem',
+                    fontFamily: 'var(--font-mono)',
+                    fontWeight: 800,
+                    padding: '0.25rem 0.65rem'
+                  }}
+                >
+                  {candidate.display_id || 'TRU-CN-????'}
+                </span>
+                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-main)', margin: 0 }}>
                   {candidate.candidate_name}
                 </h1>
-                <span className="badge badge-primary">
+                <span className="badge badge-neutral">
                   Shared Talent Pool
                 </span>
               </div>
@@ -147,8 +155,16 @@ export default function CandidateDetailPage() {
             </div>
           </div>
 
-          {/* Actions: Status Dropdown + AI Chat */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* Actions: View Resume + Status Dropdown + AI Chat */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setIsResumeOpen(true)}
+              className="btn btn-secondary"
+              title="Preview candidate resume document"
+            >
+              <FileText size={16} color="var(--primary)" /> View Resume
+            </button>
+
             <select
               value={candidate.status}
               onChange={(e) => handleStatusUpdate(e.target.value)}
@@ -210,19 +226,19 @@ export default function CandidateDetailPage() {
         </div>
       </div>
 
-      {/* Cross-JD Match Matrix */}
+      {/* Requirements Match Matrix */}
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
           <div>
             <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: 'var(--text-main)' }}>
-              Cross-JD Match Matrix
+              Requirements Match Matrix
             </h3>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-              Evaluations of this candidate against job descriptions across the platform.
+              Evaluations of this candidate against job requirements across the platform.
             </p>
           </div>
           <span className="badge badge-neutral">
-            {matches.length} Evaluated Position(s)
+            {matches.length} Evaluated Requirement(s)
           </span>
         </div>
 
@@ -240,8 +256,13 @@ export default function CandidateDetailPage() {
                     backgroundColor: 'var(--bg-surface)'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      {m.position_display_id && (
+                        <span className="badge badge-primary" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 700 }}>
+                          {m.position_display_id}
+                        </span>
+                      )}
                       <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                         {m.position_title}
                       </span>
@@ -281,10 +302,17 @@ export default function CandidateDetailPage() {
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-subtle)', fontSize: '0.875rem' }}>
-            This candidate has not yet been scored against any active Job Descriptions in Search.
+            This candidate has not yet been scored against any active Requirements in Search.
           </div>
         )}
       </div>
+
+      {/* Resume Preview Modal */}
+      <ResumePreviewModal
+        isOpen={isResumeOpen}
+        onClose={() => setIsResumeOpen(false)}
+        candidate={candidate}
+      />
 
       {/* Copilot Drawer */}
       <AIChatWindow

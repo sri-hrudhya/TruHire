@@ -68,17 +68,32 @@ def test_jd_upload_api():
     buf = io.BytesIO()
     img.save(buf, format="PNG")
 
-    res = client.post(
-        "/api/job-descriptions/upload",
+    # Upload is two-step: extract text for review, then create the requirement.
+    extracted = client.post(
+        "/api/job-descriptions/extract-text",
         headers=headers,
         files={"file": ("ml_staff.png", buf.getvalue(), "image/png")},
-        data={"title": "Staff ML Engineer"}
     )
-    assert res.status_code == 200
+    assert extracted.status_code == 200, extracted.text
+    ex = extracted.json()
+    assert ex["file_url"].startswith("/uploads/job_descriptions/")
+    res = client.post("/api/job-descriptions", headers=headers, json={
+        "title": "Staff ML Engineer", "jd_text": ex["jd_text"] or "Staff ML Engineer PyTorch",
+        "file_url": ex["file_url"], "original_filename": ex["original_filename"],
+    })
+    assert res.status_code == 200, res.text
     data = res.json()
     assert data["title"] == "Staff ML Engineer"
-    assert data["file_url"].startswith("/uploads/job_descriptions/")
     assert data["original_filename"] == "ml_staff.png"
+
+    # The stored file is only reachable through the authenticated download route.
+    assert client.get(ex["file_url"]).status_code == 404
+    assert client.get(f"/api/job-descriptions/{data['id']}/file").status_code == 401
+    assert client.get(f"/api/job-descriptions/{data['id']}/file", headers=headers).status_code == 200
+    # A client-supplied file reference outside JD storage is rejected.
+    bad = client.post("/api/job-descriptions", headers=headers, json={
+        "title": "x", "jd_text": "y", "file_url": "/uploads/../truhire.db"})
+    assert bad.status_code == 400
 
     # Cleanup
     db = SessionLocal()

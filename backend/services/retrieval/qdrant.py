@@ -1,5 +1,5 @@
 """Minimal Qdrant REST client used as TruHire's persistent vector database."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import httpx
 from backend.config import settings
 

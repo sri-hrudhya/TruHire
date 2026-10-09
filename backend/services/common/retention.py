@@ -1,14 +1,13 @@
 import asyncio
-import os
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database import SessionLocal
-from backend.models import Candidate, CandidateMatch, Conversation, IngestionBatch, Position, SearchState
+from backend.services.common.cache import clear_cache
+from backend.models import AIAuditEvent, Candidate, CandidateMatch, Conversation, IngestionBatch, Position, RequirementCandidateStatus, SearchState
 from backend.services.ingestion.storage import delete_file_by_url_or_path
 from backend.services.retrieval.opensearch import delete_candidates_batch as delete_opensearch_batch
 from backend.services.retrieval.qdrant import delete_candidates_batch as delete_qdrant_batch
@@ -71,6 +70,7 @@ def cleanup_expired_resumes(db: Session, retention_days: Optional[int] = None) -
         # 3. Clean up related database rows
         # Cascade deletes CandidateMatch
         db.query(CandidateMatch).filter(CandidateMatch.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+        db.query(RequirementCandidateStatus).filter(RequirementCandidateStatus.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
 
         # Remove conversations referencing candidate
         db.query(Conversation).filter(Conversation.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
@@ -124,6 +124,7 @@ def cleanup_expired_jds(db: Session, retention_days: Optional[int] = None) -> Di
     if position_ids:
         # Delete related candidate matches
         db.query(CandidateMatch).filter(CandidateMatch.position_id.in_(position_ids)).delete(synchronize_session=False)
+        db.query(RequirementCandidateStatus).filter(RequirementCandidateStatus.position_id.in_(position_ids)).delete(synchronize_session=False)
 
         # Clear position_id from search states
         db.query(SearchState).filter(SearchState.position_id.in_(position_ids)).update(
@@ -152,6 +153,14 @@ def cleanup_expired_jds(db: Session, retention_days: Optional[int] = None) -> Di
     }
 
 
+def cleanup_expired_ai_audit(db: Session, retention_days: Optional[int] = None) -> int:
+    days = retention_days or settings.AI_AUDIT_RETENTION_DAYS
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    deleted = db.query(AIAuditEvent).filter(AIAuditEvent.created_at < cutoff).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
 def run_retention_cleanup(
     db: Optional[Session] = None,
     resume_retention_days: Optional[int] = None,
@@ -169,6 +178,7 @@ def run_retention_cleanup(
     try:
         resume_stats = cleanup_expired_resumes(db, retention_days=resume_retention_days)
         jd_stats = cleanup_expired_jds(db, retention_days=jd_retention_days)
+        ai_audit_deleted = cleanup_expired_ai_audit(db)
 
         summary = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -177,7 +187,11 @@ def run_retention_cleanup(
             "total_files_deleted": resume_stats["files_deleted"] + jd_stats["files_deleted"],
             "total_candidates_deleted": resume_stats["candidates_deleted"],
             "total_jds_deleted": jd_stats["jds_deleted"],
+            "ai_audit_events_deleted": ai_audit_deleted,
         }
+        if summary["total_candidates_deleted"] or summary["total_jds_deleted"]:
+            for prefix in ("candidates:list:", "candidate:", "requirements:", "truhire:site:jds:", "search:", "email:"):
+                clear_cache(prefix)
         print(f"Data retention cleanup completed: {summary}")
         return summary
     finally:

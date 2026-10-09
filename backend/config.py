@@ -9,7 +9,12 @@ class Settings(BaseSettings):
     APP_NAME: str = "TruHire"
     APP_ENV: str = "development"
 
+    # PostgreSQL in all real environments, e.g. postgresql+psycopg://user:pass@localhost:5432/truhire
+    # (URL-encode special characters in the password, e.g. "@" -> "%40"). SQLite remains a
+    # zero-setup fallback for quick local experiments.
     DATABASE_URL: str = Field(default="sqlite:///./truhire.db")
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
 
     SECRET_KEY: str = Field(default="truhire_dev_secret_key_change_me_in_production")
     ALGORITHM: str = "HS256"
@@ -100,6 +105,27 @@ class Settings(BaseSettings):
     BASELINE_SCORE: float = 0.20
     EXPERIENCE_PENALTY: float = 0.10
     EDUCATION_PENALTY: float = 0.05
+
+    # Requirements view only lists candidates at or above this match score.
+    REQUIREMENT_MATCH_THRESHOLD: float = 50.0
+
+    # AI governance. With enforcement on, AI output that the guardrails cannot verify
+    # (including when Laya is unavailable) is replaced by deterministic fallbacks or blocked.
+    GUARDRAILS_ENFORCE: bool = True
+    AI_AUDIT_RETENTION_DAYS: int = 365
+
+    # Outbound email. Without SMTP_HOST, sends are recorded as "simulated" and nothing leaves the server.
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM: Optional[str] = None
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT: float = 20.0
+    # Hiring-company facts given to the LLM when drafting candidate emails; unset values are never invented.
+    COMPANY_NAME: Optional[str] = None
+    COMPANY_DESCRIPTION: Optional[str] = None
 
     ANALYTICS_TOP_SKILLS: int = 20
     CACHE_TTL_QUERY: int = 60

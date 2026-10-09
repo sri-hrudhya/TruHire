@@ -1,6 +1,6 @@
 import io
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 import pypdf
 
 # Common tech & general skills dictionary for fast heuristic extraction
@@ -180,6 +180,11 @@ def extract_text_from_file(filename: str, file_bytes: bytes) -> str:
     Supports PDF, Word Documents (.docx, .doc), RTF, plain text (.txt, .md),
     and image formats (.jpg, .jpeg, .png, .webp, .bmp, .tiff).
     """
+    # NUL characters never belong in resume text and PostgreSQL text columns reject them.
+    return _extract_text(filename, file_bytes).replace("\x00", "")
+
+
+def _extract_text(filename: str, file_bytes: bytes) -> str:
     ext = os.path.splitext(filename)[1].lower()
 
     if ext in PDF_EXTENSIONS:

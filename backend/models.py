@@ -23,6 +23,7 @@ class User(Base):
 class Position(Base):
     __tablename__ = "positions"
     id = Column(String, primary_key=True, default=generate_uuid)
+    display_id = Column(String, unique=True, index=True, nullable=True)
     title = Column(String, nullable=False, index=True)
     jd_text = Column(Text, nullable=False)
     jd_summary = Column(Text, nullable=True)
@@ -53,6 +54,7 @@ class IngestionBatch(Base):
 class Candidate(Base):
     __tablename__ = "candidates"
     id = Column(String, primary_key=True, default=generate_uuid)
+    display_id = Column(String, unique=True, index=True, nullable=True)
     position_id = Column(String, ForeignKey("positions.id"), nullable=True)
     resume_file_url = Column(String, nullable=True)
     candidate_name = Column(String, nullable=False, index=True)
@@ -131,3 +133,122 @@ class ConversationMessage(Base):
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     conversation = relationship("Conversation", back_populates="messages")
+
+
+REQUIREMENT_STATUSES = ("Pending Review", "Shortlisted", "Not Shortlisted")
+DEFAULT_REQUIREMENT_STATUS = "Pending Review"
+
+
+class RequirementCandidateStatus(Base):
+    """Recruiter review status of one candidate for one requirement; independent of Candidate.status."""
+    __tablename__ = "requirement_candidate_statuses"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    position_id = Column(String, ForeignKey("positions.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidate_id = Column(String, ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String, nullable=False, default=DEFAULT_REQUIREMENT_STATUS)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("position_id", "candidate_id", name="uq_requirement_candidate_status"),)
+
+
+EMAIL_STATUS_SENT = "sent"
+EMAIL_STATUS_SIMULATED = "simulated"
+EMAIL_STATUS_FAILED = "failed"
+
+
+class EmailRecord(Base):
+    """Email history. Role/candidate fields are snapshots so history survives requirement or candidate deletion."""
+    __tablename__ = "email_records"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    position_id = Column(String, nullable=True, index=True)
+    position_display_id = Column(String, nullable=True)
+    position_title = Column(String, nullable=True)
+    candidate_id = Column(String, nullable=True, index=True)
+    candidate_display_id = Column(String, nullable=True)
+    candidate_name = Column(String, nullable=True)
+    recipient_email = Column(String, nullable=False)
+    subject = Column(Text, nullable=False)
+    body = Column(Text, nullable=False)
+    status = Column(String, nullable=False, index=True)
+    delivery_mode = Column(String, nullable=False)
+    error = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, default=1)
+    idempotency_key = Column(String, nullable=True, unique=True)
+    sent_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AIAuditEvent(Base):
+    """One row per AI model call, guardrail verdict or AI-driven screening decision.
+
+    Prompts and outputs are stored only as PII-redacted, truncated previews plus a hash
+    of the full prompt, so the trail is reviewable without becoming a second resume store.
+    """
+    __tablename__ = "ai_audit_events"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    trace_id = Column(String, nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    feature = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=True)
+    status = Column(String, nullable=False, index=True)  # ok | error | blocked
+    prompt_sha256 = Column(String, nullable=True)
+    prompt_preview = Column(Text, nullable=True)
+    output_preview = Column(Text, nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    latency_ms = Column(Float, nullable=True)
+    details = Column(JSON, nullable=True)  # guardrail verdicts, screening reasons, etc.
+    error = Column(Text, nullable=True)
+
+
+class IdSequence(Base):
+    """Monotonic counters for human-readable display IDs; numbers are never reused after deletion."""
+    __tablename__ = "id_sequences"
+    name = Column(String, primary_key=True)
+    value = Column(Integer, nullable=False, default=0)
+
+
+POSITION_ID_PREFIX = "TRU-JD-"
+CANDIDATE_ID_PREFIX = "TRU-CN-"
+
+
+def _max_existing_display_number(db, model, prefix: str) -> int:
+    import re
+    max_num = 0
+    for (d_id,) in db.query(model.display_id).filter(model.display_id.like(f"{prefix}%")).all():
+        m = re.fullmatch(rf"{re.escape(prefix)}(\d+)", d_id or "")
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+    return max_num
+
+
+def seed_id_sequence(db, model, prefix: str) -> None:
+    """Create the counter row if missing, starting after the highest ID already issued."""
+    if db.query(IdSequence).filter(IdSequence.name == prefix).first() is None:
+        db.add(IdSequence(name=prefix, value=_max_existing_display_number(db, model, prefix)))
+        db.flush()
+
+
+def _next_display_id(db, model, prefix: str) -> str:
+    # The atomic UPDATE takes the write lock, so concurrent sessions cannot draw the same number.
+    updated = db.query(IdSequence).filter(IdSequence.name == prefix).update(
+        {IdSequence.value: IdSequence.value + 1}, synchronize_session=False
+    )
+    if not updated:
+        seed_id_sequence(db, model, prefix)
+        db.query(IdSequence).filter(IdSequence.name == prefix).update(
+            {IdSequence.value: IdSequence.value + 1}, synchronize_session=False
+        )
+    value = db.query(IdSequence.value).filter(IdSequence.name == prefix).scalar()
+    return f"{prefix}{value:04d}"
+
+
+def get_next_position_display_id(db) -> str:
+    return _next_display_id(db, Position, POSITION_ID_PREFIX)
+
+
+def get_next_candidate_display_id(db) -> str:
+    return _next_display_id(db, Candidate, CANDIDATE_ID_PREFIX)

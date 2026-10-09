@@ -2,7 +2,6 @@ import asyncio
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -12,7 +11,7 @@ from backend.rate_limit import limiter
 from backend.services.common.observability import ObservabilityMiddleware
 from backend.services.common.retention import schedule_retention_cleanup_task
 from backend.services.retrieval.opensearch import init_opensearch_index
-from backend.routers import auth, ingestion, job_descriptions, candidates, search, analytics, chat, export, retention
+from backend.routers import auth, ingestion, job_descriptions, candidates, search, analytics, chat, export, retention, email, ai_audit
 
 ensure_schema()
 Path(settings.STORAGE_DIR).mkdir(parents=True, exist_ok=True)
@@ -25,7 +24,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-app.mount("/uploads", StaticFiles(directory=settings.STORAGE_DIR), name="uploads")
+# Uploaded resumes/JDs are deliberately NOT served statically; they are streamed only via
+# authenticated routes (GET /api/candidates/{id}/resume, GET /api/job-descriptions/{id}/file).
 
 @app.on_event("startup")
 async def startup_event():
@@ -46,6 +46,8 @@ for router in (
     chat.router,
     export.router,
     retention.router,
+    email.router,
+    ai_audit.router,
 ):
     app.include_router(router)
 

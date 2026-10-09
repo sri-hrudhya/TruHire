@@ -34,11 +34,13 @@ or:
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from backend.config import settings
+from backend.services.common import ai_audit
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +505,39 @@ def chat_completion(
 
     base_url = _vllm_base_url()
     endpoint = f"{base_url}/chat/completions"
+    prompt_text = "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in messages)
+    started = time.perf_counter()
+    try:
+        data = _post_chat(endpoint, model, payload)
+    except Exception as exc:
+        ai_audit.record(provider="vllm", model=model, status="error", prompt=prompt_text,
+                        latency_ms=(time.perf_counter() - started) * 1000, error=str(exc))
+        raise
 
+    choices = data.get("choices")
+    if not choices:
+        ai_audit.record(provider="vllm", model=model, status="error", prompt=prompt_text,
+                        latency_ms=(time.perf_counter() - started) * 1000, error="no choices returned")
+        raise RuntimeError(
+            "DGX vLLM returned no choices.\n"
+            f"Response: {data}"
+        )
+
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    content = "" if content is None else str(content)
+    usage = data.get("usage") or {}
+    ai_audit.record(
+        provider="vllm", model=model, prompt=prompt_text, output=content,
+        prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
+        latency_ms=(time.perf_counter() - started) * 1000,
+        details={"finish_reason": choices[0].get("finish_reason"), "temperature": temperature, "max_tokens": max_tokens},
+    )
+    return content
+
+
+def _post_chat(endpoint: str, model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """HTTP round trip to the vLLM chat endpoint; returns the decoded JSON body."""
     headers = _headers(
         _vllm_api_key()
     )
@@ -554,19 +588,4 @@ def chat_completion(
             f"{response.text[:1000]}"
         ) from exc
 
-    choices = data.get("choices")
-
-    if not choices:
-        raise RuntimeError(
-            "DGX vLLM returned no choices.\n"
-            f"Response: {data}"
-        )
-
-    message = choices[0].get("message") or {}
-
-    content = message.get("content")
-
-    if content is None:
-        return ""
-
-    return str(content)
+    return data

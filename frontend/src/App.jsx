@@ -13,6 +13,7 @@ import JobDescriptionsPage from './pages/JobDescriptionsPage';
 import SearchPage from './pages/SearchPage';
 import CandidateDetailPage from './pages/CandidateDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import EmailPage from './pages/EmailPage';
 
 // Protected layout wrapper
 function ProtectedLayout() {
@@ -62,9 +63,11 @@ export default function App() {
             <Route element={<ProtectedLayout />}>
               <Route path="/" element={<Navigate to="/ingestion" replace />} />
               <Route path="/ingestion" element={<IngestionPage />} />
-              <Route path="/job-descriptions" element={<JobDescriptionsPage />} />
-              <Route path="/positions" element={<Navigate to="/job-descriptions" replace />} />
+              <Route path="/requirements" element={<JobDescriptionsPage />} />
+              <Route path="/job-descriptions" element={<Navigate to="/requirements" replace />} />
+              <Route path="/positions" element={<Navigate to="/requirements" replace />} />
               <Route path="/search" element={<SearchPage />} />
+              <Route path="/email" element={<EmailPage />} />
               <Route path="/candidates/:id" element={<CandidateDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
             </Route>

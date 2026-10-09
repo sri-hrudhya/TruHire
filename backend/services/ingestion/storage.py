@@ -1,5 +1,4 @@
 import hashlib
-import os
 from pathlib import Path
 from typing import Tuple, Optional
 from backend.config import settings
@@ -56,6 +55,24 @@ def save_upload_file(filename: str, file_bytes: bytes, category: str = "resumes"
         f.write(file_bytes)
 
     return f"{prefix}/{target_filename}", file_hash
+
+
+def resolve_stored_file(file_url: Optional[str]) -> Optional[Path]:
+    """Map a stored '/uploads/...' reference to a file on disk, or None.
+
+    Only paths that resolve inside STORAGE_DIR are returned, so a tampered reference
+    (absolute path, '..' segments) can never be used to read arbitrary files.
+    """
+    if not file_url:
+        return None
+    clean = file_url.replace("\\", "/").lstrip("/")
+    if not clean.startswith("uploads/"):
+        return None
+    root = Path(settings.STORAGE_DIR).resolve()
+    target = (root / clean[len("uploads/"):]).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        return None
+    return target
 
 
 def delete_file_by_url_or_path(file_url_or_path: Optional[str]) -> bool:

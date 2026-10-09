@@ -1,18 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  BarChart3, 
-  Users, 
-  FileText, 
-  UploadCloud, 
-  TrendingUp, 
-  CheckCircle2, 
-  Clock, 
+import {
+  BarChart3,
+  Users,
+  FileText,
+  UploadCloud,
   Filter,
-  Layers,
-  Award,
-  AlertTriangle
+  Award
 } from 'lucide-react';
 import { analyticsApi, jdApi } from '../lib/api';
+import AIAuditPanel from '../components/AIAuditPanel';
 
 export default function AnalyticsPage() {
   const [data, setData] = useState(null);
@@ -84,7 +80,7 @@ export default function AnalyticsPage() {
           </p>
         </div>
 
-        {/* Filter by Job Description for Match Score Distribution */}
+        {/* Filter by Requirement for Match Score Distribution */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-muted)' }}>
             Score Distribution for:
@@ -95,10 +91,10 @@ export default function AnalyticsPage() {
             className="input-field"
             style={{ width: 'auto', fontSize: '0.8125rem', padding: '0.45rem 0.75rem' }}
           >
-            <option value="">All Job Descriptions (Aggregate)</option>
+            <option value="">All Requirements (Aggregate)</option>
             {jds.map(jd => (
               <option key={jd.id} value={jd.id}>
-                {jd.title} (v{jd.jd_version})
+                {jd.display_id ? `${jd.display_id} - ` : ''}{jd.title} (v{jd.jd_version})
               </option>
             ))}
           </select>
@@ -122,14 +118,14 @@ export default function AnalyticsPage() {
 
         <div className="card">
           <div className="flex items-center justify-between text-muted mb-2">
-            <span className="text-sm font-semibold">Job Descriptions</span>
+            <span className="text-sm font-semibold">Requirements</span>
             <FileText size={18} color="var(--info)" />
           </div>
           <div className="text-xl font-extrabold text-main">
             {summary.total_job_descriptions || 0}
           </div>
           <div className="text-xs text-subtle mt-1">
-            Active versioned specifications
+            Active requirement specifications
           </div>
         </div>
 
@@ -358,6 +354,8 @@ export default function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      <AIAuditPanel />
     </div>
   );
 }

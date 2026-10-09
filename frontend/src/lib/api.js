@@ -43,22 +43,32 @@ export const ingestionApi = {
   uploadResumes: (formData) => api.post('/ingest/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
-  getBatches: (limit = 20, offset = 0) => api.get(`/ingest/batches?limit=${limit}&offset=${offset}`),
   getBatch: (id) => api.get(`/ingest/batches/${id}`),
 };
 
 export const jdApi = {
   list: () => api.get('/job-descriptions'),
-  get: (id) => api.get(`/job-descriptions/${id}`),
   create: (data) => api.post('/job-descriptions', data),
   update: (id, data) => api.put(`/job-descriptions/${id}`, data),
+  delete: (id) => api.delete(`/job-descriptions/${id}`),
+  getMatches: (id, top_n = 50) => api.get(`/job-descriptions/${id}/matches?top_n=${top_n}`),
+  setCandidateStatus: (id, candidateId, status) => api.put(`/job-descriptions/${id}/candidates/${candidateId}/status`, { status }),
   summarize: (id) => api.post(`/job-descriptions/${id}/summarize`),
-  upload: (formData) => api.post('/job-descriptions/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  }),
+  getFile: (id) => api.get(`/job-descriptions/${id}/file`, { responseType: 'blob' }),
   extractText: (formData) => api.post('/job-descriptions/extract-text', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
+};
+
+// Shared by the Requirements page and the Email page so both write to the same history.
+export const emailApi = {
+  getConfig: () => api.get('/email/config'),
+  // One LLM call per candidate; allow longer than the default timeout.
+  generate: (positionId, candidateIds) => api.post('/email/generate', { position_id: positionId, candidate_ids: candidateIds }, { timeout: 180000 }),
+  send: (positionId, emails, allowResend = false) => api.post('/email/send', { position_id: positionId, emails, allow_resend: allowResend }, { timeout: 120000 }),
+  history: () => api.get('/email/history'),
+  historyForRole: (positionId) => api.get(`/email/history/${positionId}`),
+  retry: (id) => api.post(`/email/records/${id}/retry`),
 };
 
 export const retentionApi = {
@@ -70,17 +80,16 @@ export const retentionApi = {
 };
 
 export const candidatesApi = {
-  list: (limit = 20, offset = 0) => api.get(`/candidates?limit=${limit}&offset=${offset}`),
   get: (id) => api.get(`/candidates/${id}`),
   updateStatus: (id, status) => api.patch(`/candidates/${id}/status`, { status }),
   getMatches: (id) => api.get(`/candidates/${id}/matches`),
+  getResumeFile: (id) => api.get(`/candidates/${id}/resume`, { responseType: 'blob' }),
 };
 
 export const searchApi = {
   search: (payload) => api.post('/search', payload),
   getState: () => api.get('/search/state'),
   clearState: () => api.delete('/search/state'),
-  parseQuery: (query, existing_skills = []) => api.post('/search/parse-query', { query, existing_skills }),
 };
 
 export const analyticsApi = {
@@ -90,6 +99,10 @@ export const analyticsApi = {
   },
 };
 
+export const aiAuditApi = {
+  list: (params = {}) => api.get('/ai-audit', { params }),
+};
+
 export const chatApi = {
   sendMessage: (payload) => api.post('/chat', payload),
   listConversations: () => api.get('/chat/conversations'),
@@ -97,14 +110,6 @@ export const chatApi = {
 };
 
 export const exportApi = {
-  getExportUrl: (format = 'xlsx', positionId = null, status = null) => {
-    const token = localStorage.getItem('truhire_token');
-    let url = `/api/export/candidates?format=${format}`;
-    if (positionId) url += `&position_id=${positionId}`;
-    if (status) url += `&status=${status}`;
-    if (token) url += `&token=${encodeURIComponent(token)}`;
-    return url;
-  },
   downloadCandidates: async (format = 'xlsx', positionId = null, status = null) => {
     const response = await api.get('/export/candidates', {
       params: {
@@ -138,13 +143,3 @@ export const exportApi = {
     return true;
   }
 };
-
-export default api;
-
-
-// TruHire API debugging helper: preserves backend error details in development.
-export const getApiError = (error) => ({
-  status: error?.response?.status ?? null,
-  data: error?.response?.data ?? null,
-  message: error?.message ?? 'Unknown API error',
-});

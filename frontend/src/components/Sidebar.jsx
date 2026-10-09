@@ -5,6 +5,7 @@ import {
   FileText,
   Search,
   BarChart3,
+  Mail,
   Sun,
   Moon,
   LogOut,
@@ -20,8 +21,9 @@ export default function Sidebar() {
 
   const navItems = [
     { name: 'Ingestion', path: '/ingestion', icon: UploadCloud },
-    { name: 'Job Descriptions', path: '/job-descriptions', icon: FileText },
+    { name: 'Requirements', path: '/requirements', icon: FileText },
     { name: 'Search', path: '/search', icon: Search },
+    { name: 'Email', path: '/email', icon: Mail },
     { name: 'Analytics', path: '/analytics', icon: BarChart3 },
   ];
 

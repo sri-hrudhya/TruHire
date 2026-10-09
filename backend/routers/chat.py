@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import Candidate, Position, User, Conversation, ConversationMessage
@@ -10,9 +10,13 @@ from backend.services.llm.rag import build_candidate_context, build_jd_context, 
 from backend.services.llm import decision
 from backend.services.llm.guardrails import check_chat_reply, check_decision_reply
 from backend.services.llm.laya_service import LayaUnavailable
+from backend.services.common.ai_audit import ai_feature
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
-class ChatMessage(BaseModel): role: str; content: str
+class ChatMessage(BaseModel):
+    # 'system' is never accepted from a client: that would let a user rewrite the assistant's instructions.
+    role: Literal["user", "assistant"]
+    content: str = Field(..., max_length=4000)
 class ChatRequest(BaseModel): messages: List[ChatMessage] = []; candidate_id: Optional[str] = None; position_id: Optional[str] = None; conversation_id: Optional[str] = None
 
 @router.post("")
@@ -30,12 +34,10 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
 
     # Persist only new incoming messages. The frontend sends the latest user
     # message, while the DB remains the source of truth for conversation memory.
-    if req.conversation_id:
-        for msg in req.messages:
-            if msg.role == "user":
-                db.add(ConversationMessage(conversation_id=conversation.id, role=msg.role, content=msg.content))
-    else:
-        for msg in req.messages:
+    # Only user turns are taken from the client; assistant turns are always the server's own
+    # stored replies, so a client can't fabricate prior assistant answers either.
+    for msg in req.messages:
+        if msg.role == "user":
             db.add(ConversationMessage(conversation_id=conversation.id, role=msg.role, content=msg.content))
     conversation.updated_at = datetime.utcnow()
     db.commit(); db.refresh(conversation)
@@ -65,8 +67,11 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
         try:
             laya_decision = decision.decide_interview(context, jd_context)
             if not laya_decision.should_escalate:
-                verdict = "Yes" if laya_decision.answer else "No"
-                reply = f"{verdict}, interview this candidate (Laya confidence {laya_decision.probability:.0%})."
+                verdict = "suggests interviewing" if laya_decision.answer else "does not suggest interviewing"
+                reply = (
+                    f"AI suggestion: the model {verdict} this candidate (confidence {laya_decision.probability:.0%}). "
+                    "This is decision support only - a recruiter must make the final decision."
+                )
                 is_laya_decision = True
         except LayaUnavailable:
             pass
@@ -77,9 +82,10 @@ def chat_with_rag(req: ChatRequest, db: Session = Depends(get_db), user: User = 
 
     # A Laya-direct decision is a judgment statement, not a claim from context - only
     # the safety check applies (see check_decision_reply's docstring).
-    guard = check_decision_reply(reply) if is_laya_decision else check_chat_reply(reply, context)
+    with ai_feature("interview_decision" if is_laya_decision else "chat"):
+        guard = check_decision_reply(reply) if is_laya_decision else check_chat_reply(reply, context)
     if not guard.passed:
-        reply = "I can't confidently answer that from the available candidate/JD data — please review this one manually."
+        reply = "I couldn't verify this answer against the available candidate/JD data — please review this one manually."
 
     db.add(ConversationMessage(conversation_id=conversation.id, role="assistant", content=reply)); db.commit()
     return {"reply": reply, "context_type": context_type, "conversation_id": conversation.id, "intent": intent}
