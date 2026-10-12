@@ -1,8 +1,10 @@
 import axios from 'axios';
+import { cachingAdapter, clearRequestCache } from './requestCache';
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  adapter: cachingAdapter,
 });
 
 // Request interceptor to inject JWT
@@ -23,6 +25,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.response && error.response.status === 401) {
       if (!window.location.pathname.startsWith('/login')) {
+        clearRequestCache();
         localStorage.removeItem('truhire_token');
         localStorage.removeItem('truhire_user');
         window.location.href = '/login';
@@ -44,6 +47,8 @@ export const ingestionApi = {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
   getBatch: (id) => api.get(`/ingest/batches/${id}`),
+  // history is polled / manually refreshed: always bypass the client cache (the server caches for 10s)
+  history: (params = {}) => api.get('/ingest/history', { params, headers: { 'X-Cache-Bypass': '1' } }),
 };
 
 export const jdApi = {

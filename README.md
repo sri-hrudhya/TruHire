@@ -90,15 +90,8 @@ uv sync                      # or: python -m venv .venv && pip install -r requir
 uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port <your-chosen-port>
 ```
 
-Tables are created on first start. To move an existing SQLite database
-(`truhire.db`) into PostgreSQL, run once:
-
-```bash
-uv run python -m backend.scripts.migrate_sqlite_to_postgres --source sqlite:///./truhire.db
-```
-
-It copies every table in one transaction and verifies row counts; the SQLite
-file is left untouched.
+Tables are created on first start (PostgreSQL is the only supported database;
+set `DATABASE_URL` in `.env`).
 
 Health check: `GET /api/health`.
 

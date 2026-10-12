@@ -47,6 +47,10 @@ class IngestionBatch(Base):
     duplicate_count = Column(Integer, default=0)
     status = Column(String, default="processing")
     error_log = Column(JSON, default=list)
+    # Live progress: overall stage (queued/reading/embedding/indexing/done) and one entry per
+    # file {filename, status, detail} with status queued/extracting/analyzing/embedding/indexing/indexed/duplicate/failed.
+    stage = Column(String, default="queued")
+    file_status = Column(JSON, default=list)
     creator = relationship("User", back_populates="batches")
     candidates = relationship("Candidate", back_populates="batch")
 

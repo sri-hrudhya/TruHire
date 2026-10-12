@@ -1,3 +1,4 @@
+import { clearRequestCache } from '../lib/requestCache';
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authApi } from '../lib/api';
 
@@ -48,6 +49,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
+    clearRequestCache();
     setToken(null);
     setUser(null);
     localStorage.removeItem('truhire_token');

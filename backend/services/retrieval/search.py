@@ -1,6 +1,8 @@
 import hashlib
 import json
+import logging
 import re
+import time
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from backend.config import settings
@@ -8,13 +10,17 @@ from backend.models import Candidate, Position, CandidateMatch
 from backend.services.llm import decision
 from backend.services.llm.ai_service import generate_embedding, generate_match_summary, heuristic_match_summary
 from backend.services.common.ai_audit import ai_feature
-from backend.services.common.cache import get_cache, set_cache, clear_cache
+from backend.services.common.cache import get_cache, set_cache, clear_cache, get_index_epoch
 from backend.services.llm.guardrails import check_search_result
 from backend.services.ingestion.pii import redact_pii
 from backend.services.retrieval.qdrant import search_vectors
 from backend.services.retrieval.opensearch import search_lexical
-from backend.services.retrieval.scoring import calculate_hybrid_score, extract_skills_from_jd
+from backend.services.retrieval.scoring import calculate_hybrid_score, extract_skills_from_jd, candidate_has_skills
+from backend.services.retrieval import reranker
+from backend.services.ingestion.chunking import chunk_text
 from backend.services.ingestion.parsing import COMMON_SKILLS, YEARS_EXP_PATTERN
+
+logger = logging.getLogger(__name__)
 
 MODIFIERS_APPEND = ["and", "also", "too", "plus", "with"]
 MODIFIERS_REPLACE = ["only", "just", "instead", "solely"]
@@ -87,6 +93,8 @@ def _rrf(results: List[Tuple[str, List[Dict[str, Any]]]], top_n: int) -> Dict[st
             fused.setdefault(cid, {"rrf": 0.0, "vector_score": 0.0, "lexical_score": 0.0})
             fused[cid]["rrf"] += weights.get(source, 1.0) / (settings.HYBRID_RRF_K + rank)
             fused[cid][f"{source}_score"] = float(row.get("score", 0.0))
+            if row.get("chunk_index") is not None:
+                fused[cid]["chunk_index"] = int(row["chunk_index"])
     return dict(sorted(fused.items(), key=lambda kv: kv[1]["rrf"], reverse=True)[:top_n])
 
 def _normalize_lexical_scores(fused: Dict[str, Dict[str, float]]) -> None:
@@ -99,8 +107,11 @@ def _normalize_lexical_scores(fused: Dict[str, Dict[str, float]]) -> None:
 def _semantic_score(fused_row: Dict[str, float]) -> float:
     # Qdrant returns the actual cosine similarity. Do not derive a fake
     # similarity from RRF rank; RRF is retrieval fusion, not semantic similarity.
+    # BGE cosine for related text clusters in ~0.4-0.85, so rescale that band to 0-1;
+    # otherwise unrelated resumes already score ~50% "semantic".
     score = float(fused_row.get("vector_score", 0.0))
-    return max(0.0, min(1.0, score))
+    floor, ceil = settings.SEMANTIC_COSINE_FLOOR, settings.SEMANTIC_COSINE_CEIL
+    return max(0.0, min(1.0, (score - floor) / max(ceil - floor, 1e-6)))
 
 
 def _candidate_payload(c: Candidate) -> Dict[str, Any]:
@@ -117,37 +128,84 @@ def _search_cache_key(query_text: str, filter_skills: Optional[List[str]], min_e
     payload = json.dumps({
         "q": query_text.strip(), "skills": sorted(s.strip().lower() for s in (filter_skills or []) if s.strip()),
         "min_exp": min_experience, "position_id": position_id, "top_n": top_n,
+        # Any index write changes the epoch, so cached results never outlive the index state.
+        "epoch": get_index_epoch(),
+        "rerank": settings.RERANKER_ENABLED and settings.RERANKER_MODEL,
     }, sort_keys=True)
     return "search:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-class RequirementRequired(ValueError):
-    """Candidates are only ever matched against a selected requirement."""
+def _rerank_passage(cand: Candidate, chunk_index: Optional[int]) -> str:
+    """The resume chunk that best matched the query (re-derived deterministically from the
+    stored text, so no chunk text has to live in the vector DB), prefixed with skills."""
+    chunks = chunk_text(redact_pii(cand.resume_text or "", candidate_name=cand.candidate_name))
+    body = chunks[chunk_index] if chunk_index is not None and 0 <= chunk_index < len(chunks) else (chunks[0] if chunks else "")
+    return f"Skills: {', '.join(cand.extracted_skills or [])}. {body}"[:2500]
+
+
+class RequirementNotFound(ValueError):
+    """A position_id was supplied but does not exist."""
+
+
+RequirementRequired = RequirementNotFound  # backwards-compatible alias
+
+
+class _AdHocTarget:
+    """Transient scoring target (never persisted). Stands in for a Position when the
+    recruiter searches without a JD, or adds free text on top of one, so the typed query
+    - not a stale JD - drives retrieval, scoring and the rerank."""
+    def __init__(self, base: Optional[Position], query: str):
+        qhash = hashlib.sha256(query.encode("utf-8", "ignore")).hexdigest()[:16]
+        self.title = base.title if base else "Search query"
+        self.jd_text = (f"{base.jd_text}\n\nRecruiter focus: {query}" if base else query)
+        self.id = f"adhoc:{(base.id if base else 'none')}:{qhash}"
+        self.jd_version = base.jd_version if base else 0
 
 
 def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20) -> Dict[str, Any]:
     """Rank candidates against one requirement (JD). The query text and skill chips only
     narrow / re-rank within that requirement; there is no requirement-less scoring."""
-    target_position = db.query(Position).filter(Position.id == position_id).first() if position_id else None
-    if not target_position:
-        raise RequirementRequired("Select a requirement to search candidates.")
+    base_position = None
+    if position_id:
+        base_position = db.query(Position).filter(Position.id == position_id).first()
+        if not base_position:
+            raise RequirementNotFound("Requirement not found.")
+    query_text = (query_text or "").strip()
+    active_skills = [s.strip() for s in (filter_skills or []) if s.strip()]
+    if not base_position and not query_text and not active_skills:
+        raise ValueError("Enter a search query, add a skill filter, or select a requirement.")
 
+    started = time.perf_counter()
     limit = max(1, min(top_n, settings.SEARCH_MAX_TOP_N))
     cache_key = _search_cache_key(query_text, filter_skills, min_experience, position_id, limit)
     cached = get_cache(cache_key)
     if cached is not None:
+        logger.info("search cache_hit query=%r position=%s top_n=%s", query_text[:80], position_id or "-", limit)
         return cached
 
-    active_skills = [s.strip() for s in (filter_skills or []) if s.strip()]
-    lexical_query = f"{target_position.title} {target_position.jd_text}"
-    if query_text.strip():
-        lexical_query = f"{lexical_query} {query_text.strip()}"
-    vector = generate_embedding(lexical_query)
-    jd_skills = extract_skills_from_jd(target_position.jd_text)
+    # Query-first: whatever the recruiter typed always drives retrieval and scoring. A JD,
+    # when selected, is context (title + skills), not a replacement for the query.
+    persist_matches = bool(base_position) and not query_text
+    target_position = base_position if persist_matches else _AdHocTarget(base_position, query_text or " ".join(active_skills))
+    if query_text:
+        retrieval_text = f"{base_position.title} {query_text}" if base_position else query_text
+    elif base_position:
+        retrieval_text = f"{base_position.title} {base_position.jd_text}"
+    else:
+        retrieval_text = " ".join(active_skills)
+    lexical_query = retrieval_text
+    vector = generate_embedding(retrieval_text)
+    if base_position:
+        jd_skills = extract_skills_from_jd(base_position.jd_text)
+        jd_skills = list(dict.fromkeys(jd_skills + active_skills))
+    else:
+        jd_skills = active_skills
 
     candidate_limit = min(max(limit * settings.SEARCH_CANDIDATE_MULTIPLIER, 50), 500)
     vector_rows = search_vectors(vector, candidate_limit) if vector else []
-    lexical_rows = search_lexical(lexical_query, candidate_limit, active_skills, min_experience)
+    # Skill chips are enforced below with text-aware matching; a hard OpenSearch keyword filter on the
+    # parsed skills list would drop candidates whose resume has the skill but whose parse missed it.
+    lexical_rows = search_lexical(lexical_query, candidate_limit, None, min_experience)
     fused = _rrf([("vector", vector_rows), ("lexical", lexical_rows)], candidate_limit)
     _normalize_lexical_scores(fused)
 
@@ -164,8 +222,7 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
 
     # Hard skill filters are AND-like for explicit chips: every chip should be present.
     if active_skills:
-        required = {s.lower() for s in active_skills}
-        candidates = [c for c in candidates if required.issubset({s.lower() for s in (c.extracted_skills or [])})]
+        candidates = [c for c in candidates if candidate_has_skills(c.extracted_skills or [], active_skills, c.resume_text)]
     if min_experience is not None:
         candidates = [c for c in candidates if c.years_experience >= min_experience]
 
@@ -180,7 +237,10 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         final_score, breakdown = calculate_hybrid_score(
             semantic_sim=retrieval_score, candidate_skills=cand.extracted_skills or [], candidate_exp=cand.years_experience,
             candidate_edu=cand.education or "", jd_title=target_position.title, jd_text=target_position.jd_text,
-            target_skills=jd_skills
+            target_skills=jd_skills,
+            required_exp=None if base_position else (min_experience or 0.0),
+            skill_coverage_fallback=None if jd_skills else lexical_norm,
+            candidate_text=cand.resume_text,
         )
         deterministic.append((cand, final_score, breakdown))
 
@@ -192,6 +252,22 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     # shortlist has no realistic path into top_n anyway.
     laya_calls = 0
     deterministic.sort(key=lambda row: row[1], reverse=True)
+
+    # Pass 1a': BGE cross-encoder over the best chunk of the top of the deterministic
+    # ranking. Skipped (ordering unchanged) when disabled or the model is unavailable.
+    rerank_pool = min(len(deterministic), max(limit, settings.RERANKER_POOL_CAP))
+    rerank_query = retrieval_text[:2000]
+    relevances = None
+    if settings.RERANKER_ENABLED:
+        passages = [_rerank_passage(cand, fused.get(cand.id, {}).get("chunk_index")) for cand, _, _ in deterministic[:rerank_pool]]
+        relevances = reranker.rerank_passages(rerank_query, passages)
+    reranked_by_bge = relevances is not None
+    if relevances is not None:
+        for i, relevance in enumerate(relevances):
+            cand, score, breakdown = deterministic[i]
+            breakdown["rerank"] = {"model": settings.RERANKER_MODEL, "relevance": round(relevance * 100, 1), "pre_rerank_score": score}
+            deterministic[i] = (cand, reranker.blend(score, relevance), breakdown)
+        deterministic.sort(key=lambda row: row[1], reverse=True)
     shortlist_size = min(len(deterministic), max(limit * 2, settings.LAYA_RERANK_POOL_CAP))
     shortlist, rest = deterministic[:shortlist_size], deterministic[shortlist_size:]
 
@@ -206,7 +282,7 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     # candidate in the loop below (an N+1 query pattern - up to `candidate_limit`,
     # i.e. up to 500, individual SELECTs per search otherwise).
     all_pool_candidates = [cand for cand, *_ in reranked + unranked]
-    existing_matches = {
+    existing_matches = {} if not persist_matches else {
         m.candidate_id: m
         for m in db.query(CandidateMatch).filter(
             CandidateMatch.candidate_id.in_([c.id for c in all_pool_candidates]),
@@ -219,12 +295,14 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         if laya_signal:
             laya_calls += 1
             breakdown["laya_rerank"] = laya_signal
-        match = existing_matches.get(cand.id)
-        if not match:
-            match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
-            db.add(match)
-        # pyrefly: ignore [parse-error]
-        match.match_score = final_score; match.score_breakdown = breakdown; match.jd_version = target_position.jd_version
+        match = None
+        if persist_matches:
+            match = existing_matches.get(cand.id)
+            if not match:
+                match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
+                db.add(match)
+            # pyrefly: ignore [parse-error]
+            match.match_score = final_score; match.score_breakdown = breakdown; match.jd_version = target_position.jd_version
         scored.append((cand, final_score, breakdown, match))
 
     scored.sort(key=lambda row: row[1], reverse=True)
@@ -235,7 +313,10 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     results = []
     llm_calls = 0
     for cand, score, breakdown, match in top_slice:
-        if decision.should_reuse_summary(match, target_position):
+        if not persist_matches:
+            # Ad-hoc query: fast deterministic summary, nothing persisted against a JD.
+            summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, redact_pii(target_position.jd_text), target_position.title)
+        elif decision.should_reuse_summary(match, target_position):
             summary, quote, section = match.llm_summary, match.cited_quote, match.cited_section
         else:
             summary, quote, section = generate_match_summary(cand.extracted_skills or [], cand.years_experience, cand.education or "", target_position.title, target_position.jd_text, score)
@@ -251,11 +332,21 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         results.append({"candidate": _candidate_payload(cand), "match_score": score, "score_breakdown": breakdown, "llm_summary": summary, "cited_quote": quote, "cited_section": section})
 
     db.commit()
-    # Match rows were rewritten, so cached per-candidate match matrices are stale.
-    clear_cache("candidate:matches:")
+    if persist_matches:
+        # Match rows were rewritten, so cached per-candidate match matrices are stale.
+        clear_cache("candidate:matches:")
     response = {"total_matches": len(scored), "top_n": limit, "results": results,
-            "scored_against_jd": {"id": target_position.id, "title": target_position.title, "version": target_position.jd_version},
-            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "laya_calls": laya_calls, "llm_calls": llm_calls}}
+            "scored_against_jd": ({"id": base_position.id, "title": base_position.title, "version": base_position.jd_version} if base_position else None),
+            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "laya_calls": laya_calls, "llm_calls": llm_calls}}
     set_cache(cache_key, response, settings.CACHE_TTL_QUERY)
+    logger.info(
+        "search query=%r position=%s skills=%s min_exp=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s laya_calls=%s llm_calls=%s duration_ms=%s",
+        query_text[:80], position_id or "-", active_skills, min_experience, len(scored), len(results),
+        bool(vector_rows), bool(lexical_rows), reranked_by_bge, laya_calls, llm_calls, round((time.perf_counter() - started) * 1000),
+    )
+    if not vector_rows:
+        logger.warning("search used no vector results (Qdrant empty/unreachable or collection missing) - ranking is lexical/relational only")
+    if not lexical_rows:
+        logger.warning("search used no lexical results (OpenSearch empty/unreachable) - ranking is vector only")
     return response
     

@@ -1,3 +1,4 @@
+import logging
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,8 @@ from backend.models import AIAuditEvent, Candidate, CandidateMatch, Conversation
 from backend.services.ingestion.storage import delete_file_by_url_or_path
 from backend.services.retrieval.opensearch import delete_candidates_batch as delete_opensearch_batch
 from backend.services.retrieval.qdrant import delete_candidates_batch as delete_qdrant_batch
+
+logger = logging.getLogger(__name__)
 
 
 def _clean_orphaned_directory_files(directory_path: str, cutoff_timestamp: float) -> int:
@@ -29,9 +32,9 @@ def _clean_orphaned_directory_files(directory_path: str, cutoff_timestamp: float
                         file_path.unlink()
                         deleted_count += 1
                 except Exception as exc:
-                    print(f"Error checking/deleting file {file_path}: {exc}")
+                    logger.warning(f"Error checking/deleting file {file_path}: {exc}")
     except Exception as exc:
-        print(f"Error scanning directory {directory_path}: {exc}")
+        logger.warning(f"Error scanning directory {directory_path}: {exc}")
 
     return deleted_count
 
@@ -60,12 +63,12 @@ def cleanup_expired_resumes(db: Session, retention_days: Optional[int] = None) -
         try:
             delete_qdrant_batch(candidate_ids)
         except Exception as exc:
-            print(f"Retention: error deleting Qdrant vectors: {exc}")
+            logger.warning(f"Retention: error deleting Qdrant vectors: {exc}")
 
         try:
             delete_opensearch_batch(candidate_ids)
         except Exception as exc:
-            print(f"Retention: error deleting OpenSearch docs: {exc}")
+            logger.warning(f"Retention: error deleting OpenSearch docs: {exc}")
 
         # 3. Clean up related database rows
         # Cascade deletes CandidateMatch
@@ -90,7 +93,7 @@ def cleanup_expired_resumes(db: Session, retention_days: Optional[int] = None) -
             if remaining == 0:
                 db.delete(batch)
     except Exception as exc:
-        print(f"Retention: error cleaning old batches: {exc}")
+        logger.warning(f"Retention: error cleaning old batches: {exc}")
 
     db.commit()
 
@@ -192,7 +195,7 @@ def run_retention_cleanup(
         if summary["total_candidates_deleted"] or summary["total_jds_deleted"]:
             for prefix in ("candidates:list:", "candidate:", "requirements:", "truhire:site:jds:", "search:", "email:"):
                 clear_cache(prefix)
-        print(f"Data retention cleanup completed: {summary}")
+        logger.info(f"Data retention cleanup completed: {summary}")
         return summary
     finally:
         if own_session:
@@ -235,7 +238,7 @@ async def schedule_retention_cleanup_task() -> None:
     """
     interval_hours = settings.RETENTION_CLEANUP_INTERVAL_HOURS
     if interval_hours <= 0:
-        print("Data retention auto-cleanup worker is disabled (interval <= 0).")
+        logger.info("Data retention auto-cleanup worker is disabled (interval <= 0).")
         return
 
     # Initial short delay on startup before first check
@@ -243,10 +246,10 @@ async def schedule_retention_cleanup_task() -> None:
 
     while True:
         try:
-            print(f"Starting scheduled data retention cleanup (retention: {settings.DATA_RETENTION_DAYS} days)...")
+            logger.info(f"Starting scheduled data retention cleanup (retention: {settings.DATA_RETENTION_DAYS} days)...")
             run_retention_cleanup()
         except Exception as exc:
-            print(f"Error during scheduled retention cleanup: {exc}")
+            logger.warning(f"Error during scheduled retention cleanup: {exc}")
 
         # Sleep until next cycle
         await asyncio.sleep(interval_hours * 3600)

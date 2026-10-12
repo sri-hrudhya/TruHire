@@ -10,7 +10,8 @@ import {
   Moon,
   LogOut,
   User as UserIcon,
-  Sparkles
+  Sparkles,
+  History
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
@@ -21,6 +22,7 @@ export default function Sidebar() {
 
   const navItems = [
     { name: 'Ingestion', path: '/ingestion', icon: UploadCloud },
+    { name: 'Ingestion History', path: '/ingestion/history', icon: History },
     { name: 'Requirements', path: '/requirements', icon: FileText },
     { name: 'Search', path: '/search', icon: Search },
     { name: 'Email', path: '/email', icon: Mail },
@@ -49,6 +51,7 @@ export default function Sidebar() {
             <NavLink
               key={item.path}
               to={item.path}
+              end
               className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
             >
               <Icon size={18} />

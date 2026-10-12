@@ -1,3 +1,4 @@
+import logging
 import smtplib
 from email.message import EmailMessage
 from email.utils import make_msgid
@@ -5,6 +6,8 @@ from typing import Optional, Tuple
 
 from backend.config import settings
 from backend.models import EMAIL_STATUS_FAILED, EMAIL_STATUS_SENT, EMAIL_STATUS_SIMULATED
+
+logger = logging.getLogger(__name__)
 
 DELIVERY_MODE_SMTP = "smtp"
 DELIVERY_MODE_SIMULATED = "simulated"
@@ -29,7 +32,7 @@ def deliver_email(recipient: str, subject: str, body: str) -> Tuple[str, str, Op
     so history never reports a simulated email as sent.
     """
     if not smtp_configured():
-        print(f"[email] SIMULATED (no SMTP_HOST configured) to <{recipient}> | Subject: {subject}")
+        logger.warning(f"[email] SIMULATED (no SMTP_HOST configured) to <{recipient}> | Subject: {subject}")
         return EMAIL_STATUS_SIMULATED, DELIVERY_MODE_SIMULATED, None
 
     from_addr = sender_address()
@@ -52,6 +55,6 @@ def deliver_email(recipient: str, subject: str, body: str) -> Tuple[str, str, Op
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.send_message(msg)
     except Exception as exc:
-        print(f"[email] SMTP delivery to <{recipient}> failed: {exc}")
+        logger.warning(f"[email] SMTP delivery to <{recipient}> failed: {exc}")
         return EMAIL_STATUS_FAILED, DELIVERY_MODE_SMTP, str(exc) or exc.__class__.__name__
     return EMAIL_STATUS_SENT, DELIVERY_MODE_SMTP, None

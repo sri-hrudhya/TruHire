@@ -13,3 +13,12 @@ command.md
 .claude/
 .pytest_cache/
 .venv/
+logs/
+backup/
+# GSD-generated directories and metadata
+.agent/
+.agents/
+.gemini/
+.gsd/
+PROJECT_RULES.md
+VERSION

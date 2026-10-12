@@ -5,10 +5,9 @@ Request context (user, trace id) is set once by ObservabilityMiddleware and inhe
 everything the request runs, including threadpool endpoints and background tasks. Call
 sites only name the feature with `with ai_feature("search_summary"):`.
 
-Writes go through a single background writer thread. On SQLite the request's own session
-often holds the write lock while an LLM call is in flight, so writing inline would stall
-the request; queueing keeps auditing off the request path and the writer simply commits
-once the lock is free. Auditing is best-effort: a failed write is logged, never raised.
+Writes go through a single background writer thread so auditing stays off the request
+path (an LLM call may be in flight while the request's own transaction is open). Auditing
+is best-effort: transient failures are retried, a persistent one is logged, never raised.
 """
 import contextvars
 import hashlib
@@ -136,9 +135,8 @@ def _write_loop() -> None:
                     break
                 except Exception as exc:
                     db.rollback()
-                    # SQLite single-writer contention: wait for the request transaction to finish.
-                    if "locked" in str(exc).lower() and attempt < 2:
-                        time.sleep(1.0)
+                    if attempt < 2:  # transient (connection blip, deadlock): back off and retry
+                        time.sleep(0.5 * (attempt + 1))
                         continue
                     logger.error("AI audit write failed (%s): %s", event.get("feature"), exc)
                     break

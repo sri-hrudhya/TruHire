@@ -1,7 +1,13 @@
 """Minimal Qdrant REST client used as TruHire's persistent vector database."""
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Optional
+import time
+import uuid
 import httpx
 from backend.config import settings
+from backend.services.common.cache import bump_index_epoch
+
+logger = logging.getLogger(__name__)
 
 
 def _headers() -> Dict[str, str]:
@@ -15,69 +21,133 @@ def _url(path: str) -> str:
     return settings.QDRANT_URL.rstrip("/") + path
 
 
-def collection_exists() -> bool:
+# In-process cache of "collection exists and has the right dimension", so the hot
+# search/ingest paths do not make extra HTTP round-trips to Qdrant Cloud on every call.
+_state: Dict[str, Any] = {"ok_until": 0.0, "dim": None}
+
+
+def _invalidate_state() -> None:
+    _state["ok_until"] = 0.0
+    _state["dim"] = None
+
+
+def _collection_info() -> Optional[Dict[str, Any]]:
     with httpx.Client(timeout=10) as client:
         response = client.get(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers())
         if response.status_code == 404:
-            return False
+            return None
         response.raise_for_status()
+        return response.json().get("result", {})
+
+
+def collection_exists() -> bool:
+    if time.time() < _state["ok_until"]:
         return True
+    if _collection_info() is None:
+        return False
+    _state["ok_until"] = time.time() + settings.INDEX_STATE_TTL
+    return True
+
+
+def _collection_body(vector_size: int) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"vectors": {"size": vector_size, "distance": settings.QDRANT_DISTANCE, "on_disk": settings.QDRANT_ON_DISK}}
+    if settings.QDRANT_QUANTIZATION:
+        body["quantization_config"] = {"scalar": {"type": "int8", "quantile": settings.QDRANT_QUANTILE, "always_ram": True}}
+    return body
+
+
+def _ensure_payload_index() -> None:
+    """Keyword index on candidate_id: delete-by-filter stays fast and works on clusters
+    with strict mode (which rejects filters on unindexed fields)."""
+    with httpx.Client(timeout=15) as client:
+        response = client.put(
+            _url(f"/collections/{settings.QDRANT_COLLECTION}/index?wait=true"),
+            headers=_headers(), json={"field_name": "candidate_id", "field_schema": "keyword"},
+        )
+        response.raise_for_status()
 
 
 def ensure_collection(vector_size: int) -> None:
-    if collection_exists():
-        with httpx.Client(timeout=10) as client:
-            response = client.get(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers())
-            response.raise_for_status()
-            info = response.json().get("result", {})
-            configured = info.get("config", {}).get("params", {}).get("vectors", {})
-            if isinstance(configured, dict) and configured.get("size") and int(configured["size"]) != int(vector_size):
-                raise RuntimeError(
-                    f"Qdrant collection '{settings.QDRANT_COLLECTION}' has dimension {configured['size']}, "
-                    f"but embedding model returned dimension {vector_size}. Recreate/reindex the collection with the same embedding model."
-                )
+    if time.time() < _state["ok_until"] and _state["dim"] in (None, vector_size):
         return
-    payload = {"vectors": {"size": vector_size, "distance": settings.QDRANT_DISTANCE}}
-    with httpx.Client(timeout=15) as client:
-        response = client.put(
-            _url(f"/collections/{settings.QDRANT_COLLECTION}"),
-            headers=_headers(), json=payload
-        )
-        response.raise_for_status()
+    info = _collection_info()
+    if info is not None:
+        configured = info.get("config", {}).get("params", {}).get("vectors", {})
+        if isinstance(configured, dict) and configured.get("size") and int(configured["size"]) != int(vector_size):
+            raise RuntimeError(
+                f"Qdrant collection '{settings.QDRANT_COLLECTION}' has dimension {configured['size']}, "
+                f"but embedding model returned dimension {vector_size}. Recreate/reindex the collection with the same embedding model."
+            )
+    else:
+        with httpx.Client(timeout=30) as client:
+            response = client.put(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers(), json=_collection_body(vector_size))
+            response.raise_for_status()
+    _ensure_payload_index()
+    _state["ok_until"] = time.time() + settings.INDEX_STATE_TTL
+    _state["dim"] = vector_size
 
 
-def upsert_candidate(candidate_id: str, vector: List[float], payload: Dict[str, Any]) -> None:
-    ensure_collection(len(vector))
-    body = {
-        "points": [{"id": candidate_id, "vector": vector, "payload": payload}]
+def recreate_collection(vector_size: int) -> None:
+    """Drop and recreate the collection with the current memory-efficient layout.
+    Destructive: every candidate must be re-indexed afterwards (POST /api/ingest/reindex)."""
+    with httpx.Client(timeout=60) as client:
+        response = client.delete(_url(f"/collections/{settings.QDRANT_COLLECTION}?wait=true"), headers=_headers())
+        if response.status_code != 404:
+            response.raise_for_status()
+    _invalidate_state()
+    ensure_collection(vector_size)
+    bump_index_epoch()
+
+
+def collection_layout() -> Dict[str, Any]:
+    """Operational snapshot (size, on-disk/quantization status) for health checks."""
+    info = _collection_info()
+    if info is None:
+        return {"exists": False}
+    params = info.get("config", {}).get("params", {}).get("vectors", {})
+    return {
+        "exists": True,
+        "points": info.get("points_count"),
+        "vectors_on_disk": params.get("on_disk") if isinstance(params, dict) else None,
+        "quantization": info.get("config", {}).get("quantization_config"),
+        "status": info.get("status"),
     }
-    with httpx.Client(timeout=30) as client:
-        response = client.put(
-            _url(f"/collections/{settings.QDRANT_COLLECTION}/points?wait=true"),
-            headers=_headers(), json=body
-        )
-        response.raise_for_status()
+
+
+def _point_id(candidate_id: str, chunk_index: int) -> str:
+    # Deterministic UUIDs so re-indexing a candidate overwrites its own chunks.
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{candidate_id}:{chunk_index}"))
+
+
+def _points(candidate_id: str, vectors: List[List[float]], payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        {"id": _point_id(candidate_id, i), "vector": vec, "payload": {**payload, "candidate_id": candidate_id, "chunk_index": i}}
+        for i, vec in enumerate(vectors)
+    ]
+
+
+def upsert_candidate(candidate_id: str, vectors: List[List[float]], payload: Dict[str, Any]) -> None:
+    upsert_candidates_batch([(candidate_id, vectors, payload)])
 
 
 def upsert_candidates_batch(items: List[tuple]) -> None:
-    """Batched form of upsert_candidate: items is a list of
-    (candidate_id, vector, payload) tuples, upserted in one request instead of one
-    HTTP call per candidate. Used by bulk ingestion."""
+    """items: (candidate_id, [chunk vectors], payload). Existing points for those
+    candidates (including legacy single-vector points) are removed first so a
+    re-index never leaves stale chunks behind."""
+    items = [i for i in items if i[1]]
     if not items:
         return
-    ensure_collection(len(items[0][1]))
-    body = {
-        "points": [
-            {"id": candidate_id, "vector": vector, "payload": payload}
-            for candidate_id, vector, payload in items
-        ]
-    }
+    ensure_collection(len(items[0][1][0]))
+    delete_candidates_batch([cid for cid, _, _ in items])
+    points = [p for cid, vecs, payload in items for p in _points(cid, vecs, payload)]
     with httpx.Client(timeout=60) as client:
-        response = client.put(
-            _url(f"/collections/{settings.QDRANT_COLLECTION}/points?wait=true"),
-            headers=_headers(), json=body
-        )
-        response.raise_for_status()
+        for i in range(0, len(points), 256):
+            response = client.put(
+                _url(f"/collections/{settings.QDRANT_COLLECTION}/points?wait=true"),
+                headers=_headers(), json={"points": points[i:i + 256]}
+            )
+            response.raise_for_status()
+    bump_index_epoch()
 
 
 def delete_candidate(candidate_id: str) -> None:
@@ -87,7 +157,7 @@ def delete_candidate(candidate_id: str) -> None:
 def delete_candidates_batch(candidate_ids: List[str]) -> None:
     if not candidate_ids or not collection_exists():
         return
-    body = {"points": candidate_ids}
+    body = {"filter": {"must": [{"key": "candidate_id", "match": {"any": list(candidate_ids)}}]}}
     try:
         with httpx.Client(timeout=30) as client:
             response = client.post(
@@ -95,19 +165,18 @@ def delete_candidates_batch(candidate_ids: List[str]) -> None:
                 headers=_headers(), json=body
             )
             response.raise_for_status()
+        bump_index_epoch()
     except Exception as exc:
-        print(f"Qdrant batch delete points note: {exc}")
+        logger.warning(f"Qdrant batch delete points note: {exc}")
 
 
 def search_vectors(query_vector: List[float], top_k: int = 20) -> List[Dict[str, Any]]:
+    """Chunk-level search aggregated to one row per candidate (best chunk wins)."""
     if not collection_exists():
         return []
-    body = {
-        "vector": query_vector,
-        "limit": top_k,
-        "with_payload": True,
-        "with_vector": False,
-    }
+    body: Dict[str, Any] = {"vector": query_vector, "limit": top_k * 4, "with_payload": True, "with_vector": False}
+    if settings.QDRANT_QUANTIZATION:
+        body["params"] = {"quantization": {"rescore": True, "oversampling": settings.QDRANT_RESCORE_OVERSAMPLING}}
     with httpx.Client(timeout=30) as client:
         response = client.post(
             _url(f"/collections/{settings.QDRANT_COLLECTION}/points/search"),
@@ -115,11 +184,11 @@ def search_vectors(query_vector: List[float], top_k: int = 20) -> List[Dict[str,
         )
         response.raise_for_status()
         data = response.json()
-    return [
-        {
-            "candidate_id": str(item["id"]),
-            "score": float(item.get("score", 0.0)),
-            "payload": item.get("payload") or {},
-        }
-        for item in data.get("result", [])
-    ]
+    best: Dict[str, Dict[str, Any]] = {}
+    for item in data.get("result", []):
+        payload = item.get("payload") or {}
+        cid = str(payload.get("candidate_id") or item["id"])
+        score = float(item.get("score", 0.0))
+        if cid not in best or score > best[cid]["score"]:
+            best[cid] = {"candidate_id": cid, "score": score, "chunk_index": payload.get("chunk_index"), "payload": payload}
+    return sorted(best.values(), key=lambda r: r["score"], reverse=True)[:top_k]

@@ -77,7 +77,7 @@ export default function SearchPage() {
 
     const activeSkills = overrideChips !== null ? overrideChips : filterChips;
     const activeJd = overrideJd !== null ? overrideJd : selectedJdId;
-    if (!activeJd) {
+    if (!activeJd && !query.trim() && activeSkills.length === 0) {
       setSearchResults(null);
       setLoading(false);
       return;
@@ -171,7 +171,7 @@ export default function SearchPage() {
             Candidate Search & Ranking
           </h1>
           <p className="page-header-subtitle">
-            Select a requirement to rank candidates against it, then refine with natural language, skills and experience.
+            Search by query, or select a requirement to rank candidates against it, then refine with natural language, skills and experience.
           </p>
         </div>
 
@@ -218,10 +218,10 @@ export default function SearchPage() {
           </div>
           <button
             type="submit"
-            disabled={loading || !selectedJdId}
+            disabled={loading || (!query.trim() && !selectedJdId && filterChips.length === 0)}
             className="btn btn-primary"
             style={{ padding: '0 1.5rem', minWidth: '120px' }}
-            title={selectedJdId ? undefined : 'Select a requirement first'}
+            title={(query.trim() || selectedJdId || filterChips.length) ? undefined : 'Type a query or select a requirement'}
           >
             {loading ? 'Searching...' : 'Search'}
           </button>
@@ -239,7 +239,7 @@ export default function SearchPage() {
           {/* Select Requirement to score results against */}
           <div>
             <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Briefcase size={13} /> Requirement (required)
+              <Briefcase size={13} /> Requirement (optional)
             </label>
             <select
               value={selectedJdId}
@@ -250,7 +250,7 @@ export default function SearchPage() {
               className="input-field"
               style={{ fontSize: '0.8125rem', padding: '0.5rem 0.75rem' }}
             >
-              <option value="" disabled>Select a requirement…</option>
+              <option value="">No requirement (search by query only)</option>
               {jds.map(jd => (
                 <option key={jd.id} value={jd.id}>
                   {jd.display_id ? `${jd.display_id} • ` : ''}{jd.title} (v{jd.jd_version})
@@ -347,7 +347,7 @@ export default function SearchPage() {
               )}
             </span>
           ) : (
-            'Select a requirement to view ranked candidates'
+            'Search to view ranked candidates'
           )}
         </div>
 
@@ -357,12 +357,12 @@ export default function SearchPage() {
       </div>
 
       {/* Results List */}
-      {!selectedJdId && !loading ? (
+      {!searchResults && !loading ? (
         <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
           <Briefcase size={32} color="var(--text-subtle)" style={{ margin: '0 auto 1rem' }} />
-          <div style={{ fontSize: '1rem', fontWeight: 700 }}>Select a requirement to see matching candidates</div>
+          <div style={{ fontSize: '1rem', fontWeight: 700 }}>Type a query or select a requirement to find candidates</div>
           <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-            Candidates are only ranked and scored against a specific requirement.
+            Type any skills or role in the search bar, or pick a requirement - both work independently.
           </p>
         </div>
       ) : loading ? (

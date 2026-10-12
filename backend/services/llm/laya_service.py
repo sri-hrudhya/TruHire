@@ -14,6 +14,7 @@ Everything below this module's public functions uses an app-level question shape
 installed `laya` package's own schema - `_to_laya_question`/`_to_decision` are the only
 places that need to change if that schema changes again.
 """
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -45,6 +46,8 @@ class LayaDecision:
 
 import os
 import warnings
+
+logger = logging.getLogger(__name__)
 
 # Suppress Hugging Face symlinks warning on Windows and temperature calibration warnings
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -89,7 +92,7 @@ def _get_router():
         if local_dir:
             # Checkpoint is already downloaded on disk; enforce offline mode
             os.environ["HF_HUB_OFFLINE"] = "1"
-            print(f"[laya] Using local checkpoint at {local_dir} (zero network downloads)")
+            logger.info(f"[laya] Using local checkpoint at {local_dir} (zero network downloads)")
             models = {
                 "english": (local_dir, None),
                 "multilingual": (local_dir, "multilingual"),

@@ -9,6 +9,7 @@ import AIChatWindow from './components/AIChatWindow';
 
 import AuthPage from './pages/AuthPage';
 import IngestionPage from './pages/IngestionPage';
+import IngestionHistoryPage from './pages/IngestionHistoryPage';
 import JobDescriptionsPage from './pages/JobDescriptionsPage';
 import SearchPage from './pages/SearchPage';
 import CandidateDetailPage from './pages/CandidateDetailPage';
@@ -63,6 +64,7 @@ export default function App() {
             <Route element={<ProtectedLayout />}>
               <Route path="/" element={<Navigate to="/ingestion" replace />} />
               <Route path="/ingestion" element={<IngestionPage />} />
+              <Route path="/ingestion/history" element={<IngestionHistoryPage />} />
               <Route path="/requirements" element={<JobDescriptionsPage />} />
               <Route path="/job-descriptions" element={<Navigate to="/requirements" replace />} />
               <Route path="/positions" element={<Navigate to="/requirements" replace />} />

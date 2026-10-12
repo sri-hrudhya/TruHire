@@ -1,3 +1,4 @@
+import logging
 import json
 import re
 from typing import Dict, List, Optional, Tuple
@@ -14,11 +15,13 @@ from backend.services.llm.local_embeddings import (
     generate_embeddings_batch as local_embeddings_batch,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _check_dim(vector: List[float]) -> List[float]:
     if settings.EMBEDDING_DIM and len(vector) != settings.EMBEDDING_DIM:
         # Do not silently pad/truncate: Qdrant dimension must match the real model.
-        print(f"Embedding dimension is {len(vector)}; configured EMBEDDING_DIM={settings.EMBEDDING_DIM}. Using actual dimension.")
+        logger.info(f"Embedding dimension is {len(vector)}; configured EMBEDDING_DIM={settings.EMBEDDING_DIM}. Using actual dimension.")
     return vector
 
 
@@ -63,6 +66,43 @@ def _system(role_text: str) -> Dict[str, str]:
     return {"role": "system", "content": f"{role_text} {UNTRUSTED_RULE}"}
 
 
+def _repair_truncated_json(text: str) -> Optional[dict]:
+    """Salvage JSON cut off mid-way by a token limit: drop the dangling partial item and close
+    the open brackets, so a long skills list still yields every skill that was fully written."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    s = text[start:]
+    stack, in_str, escape, last_safe = [], False, False, None
+    for i, ch in enumerate(s):
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            last_safe = (i + 1, list(stack))
+        elif ch == ",":
+            last_safe = (i, list(stack))
+    if last_safe is None:
+        return None
+    cut, open_stack = last_safe
+    candidate = s[:cut].rstrip().rstrip(",") + "".join(reversed(open_stack))
+    try:
+        return json.loads(candidate)
+    except Exception:
+        return None
+
+
 def _json_from_response(text: str) -> Optional[dict]:
     clean = text.strip()
     if "```json" in clean:
@@ -77,8 +117,8 @@ def _json_from_response(text: str) -> Optional[dict]:
             try:
                 return json.loads(match.group(0))
             except Exception:
-                return None
-    return None
+                pass
+    return _repair_truncated_json(clean)
 
 
 def summarize_jd(title: str, jd_text: str) -> str:
@@ -103,7 +143,7 @@ def summarize_jd(title: str, jd_text: str) -> str:
                 return fallback
         return result
     except Exception as exc:
-        print(f"vLLM JD summary failed: {exc}")
+        logger.warning(f"vLLM JD summary failed: {exc}")
         return fallback
 
 
@@ -141,7 +181,7 @@ def generate_match_summary(candidate_skills: List[str], candidate_exp: float, ca
         if data:
             return str(data.get("summary", ""))[:1000], str(data.get("cited_quote", ""))[:500], str(data.get("cited_section", "Requirements"))[:100]
     except Exception as exc:
-        print(f"vLLM match summary failed: {exc}")
+        logger.warning(f"vLLM match summary failed: {exc}")
     return heuristic_match_summary(candidate_skills, candidate_exp, safe_jd, jd_title)
 
 
@@ -165,14 +205,14 @@ as they appear in the JD.
             result = chat_completion([
                 _system("You are a precise requirements-extraction engine. Return valid JSON only."),
                 {"role": "user", "content": prompt}
-            ], temperature=0.0, max_tokens=500, enable_thinking=False)
+            ], temperature=0.0, max_tokens=1200, enable_thinking=False)
         data = _json_from_response(result)
         if not data:
             return None
         skills = _clean_skills(data.get("skills"))
         return skills or None
     except Exception as exc:
-        print(f"LLM JD skill extraction failed: {exc}")
+        logger.warning(f"LLM JD skill extraction failed: {exc}")
         return None
 
 
@@ -228,35 +268,55 @@ def validate_resume_fields(data: Dict) -> Dict:
     }
 
 
-def llm_parse_resume(raw_text: str, filename: str) -> Optional[Dict]:
-    """
-    Structured resume field extraction via the LLM. Deliberately not PII-redacted
-    first: extracting the candidate's own name is exactly what this call needs, and
-    it only ever reaches the self-hosted vLLM endpoint, never a third-party API.
-    Returns None (caller falls back to the heuristic parser) on any failure.
-    """
-    prompt = f"""Extract structured fields from this resume. Return JSON only with keys:
+RESUME_WINDOW_CHARS = 9000
+RESUME_MAX_WINDOWS = 4  # up to ~36K characters of a resume are read; nothing past the first page is ignored
+
+
+def _parse_resume_window(window: str, filename: str, first: bool) -> Optional[Dict]:
+    prompt = f"""Extract structured fields from this resume{'' if first else ' (a later part of the same resume)'}. Return JSON only with keys:
 candidate_name (the person's actual full name, never a section header like "Summary" or "Profile"),
 extracted_skills (array of every technical skill, tool, framework, platform, or methodology
-mentioned anywhere in the resume - do not limit yourself to any fixed list),
+mentioned anywhere in the text - do not limit yourself to any fixed list; one short string per skill),
 years_experience (total years of professional experience as a number),
 education (degree and institution, or "Not Specified" if none is stated).
 
 {untrusted("resume_filename", filename[:200])}
-{untrusted("resume_text", raw_text[:8000])}"""
+{untrusted("resume_text", window)}"""
     try:
         with ai_feature("resume_parse"):
             result = chat_completion([
                 _system("You are a precise resume-parsing engine. Return valid JSON only."),
                 {"role": "user", "content": prompt}
-            ], temperature=0.0, max_tokens=600, enable_thinking=False)
+            ], temperature=0.0, max_tokens=2000, enable_thinking=False)
         data = _json_from_response(result)
-        if not data:
-            return None
-        return validate_resume_fields(data)
+        return validate_resume_fields(data) if data else None
     except Exception as exc:
-        print(f"LLM resume parse failed: {exc}")
+        logger.warning(f"LLM resume parse failed: {exc}")
         return None
+
+
+def llm_parse_resume(raw_text: str, filename: str) -> Optional[Dict]:
+    """
+    Structured resume field extraction via the LLM. Deliberately not PII-redacted
+    first: extracting the candidate's own name is exactly what this call needs, and
+    it only ever reaches the self-hosted vLLM endpoint, never a third-party API.
+    Long resumes are read in windows (skills merged across them) so skills past the first
+    page are not lost, and truncated model output is salvaged rather than discarded.
+    Returns None (caller falls back to the heuristic parser) on total failure.
+    """
+    windows = [raw_text[i:i + RESUME_WINDOW_CHARS] for i in range(0, max(len(raw_text), 1), RESUME_WINDOW_CHARS)][:RESUME_MAX_WINDOWS]
+    results = [_parse_resume_window(w, filename, first=(i == 0)) for i, w in enumerate(windows)]
+    ok = [r for r in results if r]
+    if not ok:
+        return None
+    head = results[0] or ok[0]
+    skills = list(dict.fromkeys(sk for r in ok for sk in r["extracted_skills"]))
+    return {
+        "candidate_name": head["candidate_name"] or next((r["candidate_name"] for r in ok if r["candidate_name"]), ""),
+        "extracted_skills": skills,
+        "years_experience": head["years_experience"] or max((r["years_experience"] for r in ok), default=0.0),
+        "education": head["education"] if head["education"] != "Not Specified" else next((r["education"] for r in ok if r["education"] != "Not Specified"), "Not Specified"),
+    }
 
 
 def answer_chat_query(messages: List[Dict[str, str]], context: str) -> str:

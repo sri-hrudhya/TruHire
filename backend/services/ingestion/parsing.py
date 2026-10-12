@@ -1,3 +1,4 @@
+import logging
 import io
 import re
 from typing import Dict, Any
@@ -22,6 +23,8 @@ EDUCATION_KEYWORDS = ["Bachelor", "Master", "PhD", "B.S.", "M.S.", "B.Tech", "M.
 
 
 import os
+
+logger = logging.getLogger(__name__)
 _ocr_engine = None
 
 PDF_EXTENSIONS = {".pdf"}
@@ -48,7 +51,7 @@ def get_ocr_engine():
             from rapidocr_onnxruntime import RapidOCR
             _ocr_engine = RapidOCR()
         except Exception as exc:
-            print(f"Failed to initialize RapidOCR: {exc}")
+            logger.warning(f"Failed to initialize RapidOCR: {exc}")
             return None
     return _ocr_engine
 
@@ -74,7 +77,7 @@ def extract_text_from_image(file_bytes: bytes) -> str:
         lines = [item[1] for item in result if item and len(item) > 1 and item[1]]
         return "\n".join(lines).strip()
     except Exception as exc:
-        print(f"Error in OCR text extraction: {exc}")
+        logger.warning(f"Error in OCR text extraction: {exc}")
         return ""
 
 
@@ -95,7 +98,7 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
         if paragraphs:
             return "\n\n".join(paragraphs).strip()
     except Exception as e:
-        print(f"python-docx extraction failed, trying zip/xml fallback: {e}")
+        logger.warning(f"python-docx extraction failed, trying zip/xml fallback: {e}")
 
     try:
         import zipfile
@@ -107,7 +110,7 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
                 texts = [elem.text for elem in root.iter() if elem.text and elem.tag.endswith("t")]
                 return " ".join(texts).strip()
     except Exception as e:
-        print(f"Fallback docx extraction failed: {e}")
+        logger.warning(f"Fallback docx extraction failed: {e}")
     return ""
 
 
@@ -121,7 +124,7 @@ def extract_text_from_rtf(file_bytes: bytes) -> str:
         lines = [line.strip() for line in raw.splitlines() if line.strip()]
         return "\n".join(lines).strip()
     except Exception as e:
-        print(f"RTF extraction error: {e}")
+        logger.warning(f"RTF extraction error: {e}")
         return ""
 
 
@@ -132,7 +135,7 @@ def extract_text_from_doc(file_bytes: bytes) -> str:
         decoded = [s.decode("latin-1", errors="ignore").strip() for s in strings if len(s.decode("latin-1", errors="ignore").strip()) > 3]
         return "\n".join(decoded).strip()
     except Exception as e:
-        print(f"DOC extraction error: {e}")
+        logger.warning(f"DOC extraction error: {e}")
         return ""
 
 
@@ -170,7 +173,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
             if ocr_text_parts:
                 text = "\n\n".join(ocr_text_parts)
     except Exception as e:
-        print(f"Error extracting PDF text: {e}")
+        logger.warning(f"Error extracting PDF text: {e}")
     return text.strip()
 
 
@@ -310,7 +313,7 @@ def parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
         from backend.services.llm.ai_service import llm_parse_resume
         llm_result = llm_parse_resume(raw_text, filename)
     except Exception as exc:
-        print(f"LLM resume parse unavailable: {exc}")
+        logger.warning(f"LLM resume parse unavailable: {exc}")
         llm_result = None
 
     if not llm_result:

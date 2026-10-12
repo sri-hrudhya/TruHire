@@ -1,7 +1,10 @@
+import logging
 import hashlib
 from pathlib import Path
 from typing import Tuple, Optional
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_storage_dir() -> Path:
@@ -94,5 +97,5 @@ def delete_file_by_url_or_path(file_url_or_path: Optional[str]) -> bool:
             target_path.unlink()
             return True
     except Exception as exc:
-        print(f"Failed to delete file {file_url_or_path}: {exc}")
+        logger.warning(f"Failed to delete file {file_url_or_path}: {exc}")
     return False

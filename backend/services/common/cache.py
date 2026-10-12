@@ -1,3 +1,4 @@
+import logging
 import json
 import pickle
 import time
@@ -5,6 +6,8 @@ from typing import Any, Dict, Optional, Tuple
 import redis
 
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 _redis_client: Optional[redis.Redis] = None
 _redis_init_attempted = False
@@ -47,10 +50,10 @@ def get_redis_client() -> Optional[redis.Redis]:
 
         if client.ping():
             _redis_client = client
-            print(f"[cache] Redis cache initialized successfully ({settings.REDIS_HOST}:{settings.REDIS_PORT})")
+            logger.info(f"[cache] Redis cache initialized successfully ({settings.REDIS_HOST}:{settings.REDIS_PORT})")
             return _redis_client
     except Exception as exc:
-        print(f"[cache] Redis connection unavailable, using in-memory TTL cache fallback: {exc}")
+        logger.warning(f"[cache] Redis connection unavailable, using in-memory TTL cache fallback: {exc}")
 
     return None
 
@@ -83,7 +86,7 @@ def get_cache(key: str) -> Optional[Any]:
                 return _deserialize(val)
             return None
         except Exception as exc:
-            print(f"[cache] Redis get failed for key {key}: {exc}")
+            logger.warning(f"[cache] Redis get failed for key {key}: {exc}")
 
     # Fallback to in-memory store
     entry = _in_memory_store.get(key)
@@ -105,7 +108,7 @@ def set_cache(key: str, val: Any, ttl_seconds: int = 3600):
             r.setex(key, ttl_seconds, serialized)
             return
         except Exception as exc:
-            print(f"[cache] Redis set failed for key {key}: {exc}")
+            logger.warning(f"[cache] Redis set failed for key {key}: {exc}")
 
     # In-memory store fallback
     _in_memory_store[key] = (val, time.time() + ttl_seconds)
@@ -118,12 +121,14 @@ def delete_cache(key: str):
         try:
             r.delete(key)
         except Exception as exc:
-            print(f"[cache] Redis delete error: {exc}")
+            logger.warning(f"[cache] Redis delete error: {exc}")
     _in_memory_store.pop(key, None)
 
 
 def clear_cache(prefix: Optional[str] = None):
-    """Clears all cached items or all items matching a given prefix."""
+    """Clears all cached items or all items matching a given prefix. Also bumps the data epoch, so
+    epoch-keyed entries (analytics, ingestion history) are invalidated by every data change."""
+    bump_data_epoch()
     r = get_redis_client()
     if r is not None:
         try:
@@ -138,7 +143,7 @@ def clear_cache(prefix: Optional[str] = None):
             else:
                 r.flushdb()
         except Exception as exc:
-            print(f"[cache] Redis clear error: {exc}")
+            logger.warning(f"[cache] Redis clear error: {exc}")
 
     if prefix:
         for k in list(_in_memory_store.keys()):
@@ -161,3 +166,39 @@ def cache_user_session(user_id: str, user_dict: dict, ttl_seconds: Optional[int]
 def get_cached_user_session(user_id: str) -> Optional[dict]:
     """Retrieves user session data from Redis."""
     return get_cache(f"truhire:session:user:{user_id}")
+
+
+# ============================================================
+# Index-state versioning
+# ============================================================
+# Search results depend on what is in the vector/lexical indexes. Every index write bumps
+# this epoch, and the search cache key embeds it, so a cached result can never outlive the
+# index state it was computed from (no prefix scans; safe across several API workers when
+# Redis is available).
+_INDEX_EPOCH_KEY = "truhire:index_epoch"
+_EPOCH_TTL = 10 * 365 * 24 * 3600
+
+
+def get_index_epoch() -> str:
+    return str(get_cache(_INDEX_EPOCH_KEY) or "0")
+
+
+def bump_index_epoch() -> str:
+    epoch = str(time.time_ns())
+    set_cache(_INDEX_EPOCH_KEY, epoch, ttl_seconds=_EPOCH_TTL)
+    return epoch
+
+
+# Data epoch: bumped by every clear_cache() call (all write paths already call it), embedded in the
+# keys of aggregate endpoints so they can never serve numbers older than the last data change.
+_DATA_EPOCH_KEY = "truhire:data_epoch"
+
+
+def get_data_epoch() -> str:
+    return str(get_cache(_DATA_EPOCH_KEY) or "0")
+
+
+def bump_data_epoch() -> str:
+    epoch = str(time.time_ns())
+    set_cache(_DATA_EPOCH_KEY, epoch, ttl_seconds=_EPOCH_TTL)
+    return epoch

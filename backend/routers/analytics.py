@@ -7,6 +7,7 @@ from backend.config import settings
 from backend.database import get_db
 from backend.models import Candidate, Position, CandidateMatch, IngestionBatch, User
 from backend.auth import get_current_user
+from backend.services.common.cache import get_cache, set_cache, get_data_epoch
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -21,6 +22,16 @@ def get_analytics_overview(
     Returns high-level aggregated talent pool analytics.
     Strictly aggregates data without returning individual candidate lists.
     """
+    cache_key = f"analytics:overview:{position_id or 'all'}:{get_data_epoch()}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+    result = _compute_overview(position_id, db)
+    set_cache(cache_key, result, ttl_seconds=settings.CACHE_TTL_QUERY)
+    return result
+
+
+def _compute_overview(position_id: Optional[str], db: Session) -> Dict[str, Any]:
     # 1. Total Counts
     total_candidates = db.query(Candidate).count()
     total_positions = db.query(Position).count()

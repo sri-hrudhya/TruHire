@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 from datetime import datetime
@@ -18,6 +19,8 @@ from backend.services.common.cache import get_cache, set_cache, delete_cache, cl
 from backend.services.ingestion.parsing import extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import resolve_stored_file, save_upload_file
 from backend.services.llm.ai_service import summarize_jd
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["job-descriptions"])
 
@@ -247,7 +250,7 @@ def get_jd_matches(id: str, top_n: int, db: Session) -> dict:
         total_matches = search_res.get("total_matches", len(matches_data))
         retrieval = search_res.get("retrieval")
     except Exception as exc:
-        print(f"[matches] Fallback to existing CandidateMatch rows: {exc}")
+        logger.warning(f"[matches] Fallback to existing CandidateMatch rows: {exc}")
         db_matches = (
             db.query(CandidateMatch, Candidate)
             .join(Candidate, CandidateMatch.candidate_id == Candidate.id)

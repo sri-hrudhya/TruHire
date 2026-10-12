@@ -51,16 +51,16 @@ def test_hybrid_score_formula_and_scale_unchanged():
         jd_title="Engineer", jd_text="Python Go Rust Java engineer", target_skills=["Python", "Go", "Rust", "Java"],
         required_exp=3.0,
     )
-    # 0.45*0.5 + 0.35*0.5 + 0.20 = 0.60 -> 60.0 on the percentage scale.
-    assert score == 60.0 and breakdown["final_score"] == 60.0
+    # 0.60*0.5 + 0.40*0.5 + 0.0 baseline = 0.50 -> 50.0 on the percentage scale.
+    assert score == 50.0 and breakdown["final_score"] == 50.0
     assert breakdown["semantic_score"] == 50.0 and breakdown["skill_score"] == 50.0
 
     exact, _ = calculate_hybrid_score(
         semantic_sim=0.0, candidate_skills=["A", "B", "C"], candidate_exp=5.0, candidate_edu="BSc University",
         jd_title="x", jd_text="x", target_skills=["A", "B", "C", "D", "E", "F"], required_exp=3.0,
     )
-    # 0.35*0.5 + 0.20 = 0.375 -> 37.5
-    assert exact == 37.5
+    # 0.40*0.5 = 0.20 -> 20.0
+    assert exact == 20.0
 
 
 # --- Fixtures --------------------------------------------------------------------------
@@ -184,14 +184,14 @@ def test_stored_and_returned_scores_share_one_percentage_field(env, stub_retriev
 
     data = env["client"].get(f"/api/job-descriptions/{jd}/matches", headers=env["headers"]).json()
     shown = {m["candidate"]["id"]: m["match_score"] for m in data["matches"]}
-    # strong: retrieval 0.6*0.9=0.54 -> 0.45*0.54 + 0.35*1.0 + 0.20 = 0.793 -> 79.3
-    assert shown == {strong: 79.3}
+    # strong: cosine 0.9 rescales to 1.0; retrieval 0.6*1.0=0.6 -> 0.60*0.6 + 0.40*1.0 = 0.76 -> 76.0
+    assert shown == {strong: 76.0}
     assert data["retrieval"]["vector"] is True and data["retrieval"]["lexical"] is False
 
     db = SessionLocal()
     stored = {m.candidate_id: m.match_score for m in db.query(CandidateMatch).filter(CandidateMatch.position_id == jd).all()}
     db.close()
-    assert stored[strong] == 79.3 and 1.0 < stored[weak] < 50.0  # both scored, only one qualifies
+    assert stored[strong] == 76.0 and 0.0 <= stored[weak] < 50.0  # both scored, only one qualifies
 
 
 def test_unindexed_resumes_are_reported_not_silently_dropped(env, stub_retrieval):
@@ -240,31 +240,32 @@ def test_failed_batch_indexing_leaves_candidates_reindexable(env, monkeypatch):
         check.close()
 
 
-# --- Search is requirement-only -------------------------------------------------------
+# --- Search works with or without a requirement --------------------------------------
 
-def test_search_requires_a_requirement(env):
+def test_search_validates_inputs(env):
     client, headers = env["client"], env["headers"]
-    assert client.post("/api/search", json={"query": "python"}, headers=headers).status_code == 422
-    assert client.post("/api/search", json={"query": "python", "position_id": ""}, headers=headers).status_code == 422
+    # A bare empty search (no query, chips or JD) is rejected; an unknown JD is a 404.
+    assert client.post("/api/search", json={}, headers=headers).status_code == 422
     assert client.post("/api/search", json={"query": "python", "position_id": "no-such-id"}, headers=headers).status_code == 404
     db = SessionLocal()
     try:
-        with pytest.raises(search_module.RequirementRequired):
-            search_module.execute_candidate_search(db, query_text="python")
+        with pytest.raises(ValueError):
+            search_module.execute_candidate_search(db)
     finally:
         db.close()
 
 
-def test_saved_search_without_requirement_is_not_restored(env):
+def test_empty_saved_search_is_not_restored(env):
     from backend.models import SearchState
     db = SessionLocal()
     user = db.query(User).first()
     state = db.query(SearchState).filter(SearchState.user_id == user.id).first()
-    snapshot = {k: getattr(state, k) for k in ("position_id", "results")} if state else None
+    snapshot = {k: getattr(state, k) for k in ("position_id", "query", "results")} if state else None
     if not state:
         state = SearchState(user_id=user.id)
         db.add(state)
     state.position_id = None
+    state.query = ""
     state.results = [{"match_score": 30.0}]
     db.commit()
     try:

@@ -1,7 +1,11 @@
 """OpenSearch lexical/BM25 retrieval layer for hybrid search."""
+import logging
 from typing import Any, Dict, List, Optional
 from opensearchpy import OpenSearch
 from backend.config import settings
+from backend.services.common.cache import bump_index_epoch
+
+logger = logging.getLogger(__name__)
 
 _client: Optional[OpenSearch] = None
 
@@ -27,7 +31,7 @@ def get_opensearch_client() -> Optional[OpenSearch]:
             _client = client
             return client
     except Exception as exc:
-        print(f"OpenSearch unavailable: {exc}")
+        logger.warning(f"OpenSearch unavailable: {exc}")
     return None
 
 
@@ -50,7 +54,7 @@ def init_opensearch_index() -> bool:
             })
         return True
     except Exception as exc:
-        print(f"OpenSearch index initialization failed: {exc}")
+        logger.warning(f"OpenSearch index initialization failed: {exc}")
         return False
 
 
@@ -91,6 +95,7 @@ def index_candidates_batch(items: List[tuple]) -> None:
         for candidate_id, metadata in items
     ]
     helpers.bulk(client, actions, refresh=True)
+    bump_index_epoch()
 
 
 def delete_candidate(candidate_id: str) -> None:
@@ -110,8 +115,9 @@ def delete_candidates_batch(candidate_ids: List[str]) -> None:
             for cid in candidate_ids
         ]
         helpers.bulk(client, actions, refresh=True, ignore_status=[404])
+        bump_index_epoch()
     except Exception as exc:
-        print(f"OpenSearch batch delete note: {exc}")
+        logger.warning(f"OpenSearch batch delete note: {exc}")
 
 
 def search_lexical(query_text: str, top_k: int = 50, filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None) -> List[Dict[str, Any]]:
@@ -134,7 +140,7 @@ def search_lexical(query_text: str, top_k: int = 50, filter_skills: Optional[Lis
     try:
         response = client.search(index=settings.OPENSEARCH_INDEX, body=body)
     except Exception as exc:
-        print(f"OpenSearch lexical search failed: {exc}")
+        logger.warning(f"OpenSearch lexical search failed: {exc}")
         return []
     return [
         {"candidate_id": hit["_source"]["candidate_id"], "score": float(hit.get("_score", 0.0))}

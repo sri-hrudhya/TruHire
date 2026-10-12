@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,14 +9,21 @@ class Settings(BaseSettings):
     APP_NAME: str = "TruHire"
     APP_ENV: str = "development"
 
-    # PostgreSQL in all real environments, e.g. postgresql+psycopg://user:pass@localhost:5432/truhire
-    # (URL-encode special characters in the password, e.g. "@" -> "%40"). SQLite remains a
-    # zero-setup fallback for quick local experiments.
-    DATABASE_URL: str = Field(default="sqlite:///./truhire.db")
+    # Logging (see backend/logging_config.py). LOG_JSON=true for structured logs; empty LOG_FILE disables the file.
+    LOG_LEVEL: str = "INFO"
+    LOG_JSON: bool = False
+    LOG_FILE: str = "./logs/truhire.log"
+    SLOW_REQUEST_MS: int = 2000
+
+    # PostgreSQL only, e.g. postgresql+psycopg://user:pass@localhost:5432/truhire
+    # (URL-encode special characters in the password, e.g. "@" -> "%40"). Required, no default.
+    DATABASE_URL: str
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
 
-    SECRET_KEY: str = Field(default="truhire_dev_secret_key_change_me_in_production")
+    # Required, no default: a baked-in signing key in source would be a leaked secret.
+    # Set in .env (generate with: python -c "import secrets; print(secrets.token_urlsafe(48))").
+    SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
@@ -43,6 +50,15 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION: str = "truhire_candidate_vectors"
     QDRANT_DISTANCE: str = "Cosine"
+    # Memory-efficient layout (applied when the collection is created): full-precision
+    # vectors live on disk, int8-quantized copies stay in RAM for fast search, and the top
+    # hits are re-scored against the originals. ~4x less RAM per chunk at negligible recall loss.
+    QDRANT_ON_DISK: bool = True
+    QDRANT_QUANTIZATION: bool = True
+    QDRANT_QUANTILE: float = 0.99
+    QDRANT_RESCORE_OVERSAMPLING: float = 2.0
+    # How long (seconds) the "collection exists / dimension ok" check is cached in-process.
+    INDEX_STATE_TTL: int = 300
 
     # OpenSearch is retained for lexical/BM25 retrieval in the hybrid pipeline.
     # Required, no default - same reasoning as VLLM_BASE_URL above.
@@ -73,6 +89,15 @@ class Settings(BaseSettings):
     LAYA_RERANK_POOL_CAP: int = 50
     CACHE_TTL_DECISION: int = 3600
 
+    # Cross-encoder reranker (BGE) applied to the best-matching chunk of each shortlisted
+    # candidate. Runs in-process via fastembed/ONNX on CPU; if the model cannot load the
+    # search degrades gracefully to the un-reranked ordering.
+    RERANKER_ENABLED: bool = True
+    RERANKER_MODEL: str = "BAAI/bge-reranker-base"
+    RERANKER_POOL_CAP: int = 30
+    RERANKER_WEIGHT: float = 0.30
+    RERANKER_RETRY_SECONDS: int = 300
+
     INGEST_BATCH_SIZE: int = 50
     MAX_UPLOAD_MB: int = 15
     STORAGE_DIR: str = "./uploads"
@@ -100,9 +125,11 @@ class Settings(BaseSettings):
     HYBRID_RRF_K: int = 60
     SEARCH_CANDIDATE_MULTIPLIER: int = 5
 
-    SEMANTIC_WEIGHT: float = 0.45
-    SKILL_WEIGHT: float = 0.35
-    BASELINE_SCORE: float = 0.20
+    SEMANTIC_WEIGHT: float = 0.60
+    SKILL_WEIGHT: float = 0.40
+    BASELINE_SCORE: float = 0.0
+    SEMANTIC_COSINE_FLOOR: float = 0.40
+    SEMANTIC_COSINE_CEIL: float = 0.85
     EXPERIENCE_PENALTY: float = 0.10
     EDUCATION_PENALTY: float = 0.05
 
@@ -172,10 +199,22 @@ class Settings(BaseSettings):
     RATE_LIMIT_UPLOAD: str = "10/minute"
     RATE_LIMIT_DEFAULT: str = "60/minute"
 
+    # In development any localhost/127.0.0.1 port is allowed (frontend can run on any port).
+    # In production set CORS_ORIGINS to the exact frontend origin(s) and leave this empty.
+    CORS_ORIGIN_REGEX: Optional[str] = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     CORS_ORIGINS: List[str] = [
         "http://localhost:5173", "http://localhost:3000",
         "http://127.0.0.1:5173", "http://127.0.0.1:3000"
     ]
+
+
+    @model_validator(mode="after")
+    def _check_secrets(self):
+        if not self.DATABASE_URL.startswith("postgresql"):
+            raise ValueError("DATABASE_URL must be a PostgreSQL URL (postgresql+psycopg://user:pass@host:5432/db).")
+        if self.APP_ENV.lower() not in ("development", "dev", "test") and len(self.SECRET_KEY) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters outside development.")
+        return self
 
 
 settings = Settings()

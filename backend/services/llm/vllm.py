@@ -31,9 +31,9 @@ or:
     EMBEDDING_BASE_URL=http://localhost:8001/v1
     EMBEDDING_MODEL=<real embedding model>
 """
-
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +41,8 @@ import httpx
 
 from backend.config import settings
 from backend.services.common import ai_audit
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +289,7 @@ def resolve_embedding_model() -> str:
         )
 
     if len(models) > 1:
-        print(
+        logger.info(
             "[TruHire] Multiple embedding-server models found. "
             f"Using first model: {models[0]}"
         )

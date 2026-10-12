@@ -17,6 +17,7 @@ or more distinct instruction patterns anywhere -> blocked. A single visible phra
 resume that lists "prompt engineering") is not enough on its own; Laya is asked about
 those borderline cases when available, otherwise the resume is allowed and audited.
 """
+import logging
 import io
 import math
 import re
@@ -24,6 +25,8 @@ import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 _ZERO_WIDTH = re.compile("[​-‏⁠﻿­]")
 
@@ -107,7 +110,7 @@ def extract_hidden_text_docx(file_bytes: bytes) -> List[str]:
                         if text.strip():
                             hidden.append(text)
     except Exception as exc:
-        print(f"DOCX hidden-text scan failed: {exc}")
+        logger.warning(f"DOCX hidden-text scan failed: {exc}")
     return hidden
 
 
@@ -130,7 +133,7 @@ def extract_hidden_text_pdf(file_bytes: bytes) -> List[str]:
         import pypdf
         reader = pypdf.PdfReader(io.BytesIO(file_bytes))
     except Exception as exc:
-        print(f"PDF hidden-text scan failed to open: {exc}")
+        logger.warning(f"PDF hidden-text scan failed to open: {exc}")
         return []
 
     hidden: List[str] = []
@@ -174,7 +177,7 @@ def extract_hidden_text_pdf(file_bytes: bytes) -> List[str]:
         try:
             page.extract_text(visitor_operand_before=before, visitor_text=on_text)
         except Exception as exc:
-            print(f"PDF hidden-text scan failed on a page: {exc}")
+            logger.warning(f"PDF hidden-text scan failed on a page: {exc}")
     return hidden
 
 

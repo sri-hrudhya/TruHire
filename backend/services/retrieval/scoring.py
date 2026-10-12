@@ -1,7 +1,11 @@
+import logging
 import hashlib
 import re
+from functools import lru_cache
 from typing import Dict, Any, List, Optional, Tuple
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def extract_skills_from_jd(jd_text: str) -> List[str]:
@@ -23,7 +27,7 @@ def extract_skills_from_jd(jd_text: str) -> List[str]:
         from backend.services.llm.ai_service import llm_extract_jd_skills
         llm_skills = llm_extract_jd_skills(jd_text)
     except Exception as exc:
-        print(f"LLM JD skill extraction unavailable: {exc}")
+        logger.warning(f"LLM JD skill extraction unavailable: {exc}")
 
     if llm_skills:
         set_cache(cache_key, llm_skills, settings.CACHE_TTL_DECISION)
@@ -56,28 +60,70 @@ def extract_required_experience(jd_text: str) -> float:
     return 3.0  # default reasonable expectation if unstated
 
 
-def compute_skill_overlap(candidate_skills: List[str], target_skills: List[str]) -> Tuple[float, List[str], List[str]]:
+# Spelling variants that must count as the same skill. Keys and values are normalized forms.
+SKILL_ALIASES = {
+    "nodejs": "node.js", "node": "node.js", "js": "javascript", "ts": "typescript", "k8s": "kubernetes",
+    "postgres": "postgresql", "golang": "go", "reactjs": "react", "vuejs": "vue", "angularjs": "angular",
+    "springboot": "spring boot", "restful": "rest api", "rest": "rest api", "restful api": "rest api",
+    "ci cd": "ci/cd", "cicd": "ci/cd", "ml": "machine learning", "gcp": "google cloud", "tf": "terraform",
+    "mongo": "mongodb", "elastic search": "elasticsearch", "dotnet": ".net", "csharp": "c#",
+    "microservice": "microservices", "micro-services": "microservices", "micro services": "microservices",
+    "web-service": "web services", "webservices": "web services",
+}
+_VERSION = re.compile(r"(?<![a-z0-9])v?\d+(?:\.\d+)*(?:\.x)?(?![a-z0-9+#])", re.I)
+
+
+def normalize_skill(skill: str) -> str:
+    """'Camunda 8.5' -> 'camunda', 'REST APIs' -> 'rest api', 'NodeJS' -> 'node.js'. Versions are dropped
+    (a Camunda 8 developer satisfies 'Camunda'), plurals folded, common aliases unified."""
+    s = re.sub(r"\s+", " ", (skill or "").strip().lower())
+    s = _VERSION.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip(" -_/,.")
+    if s.endswith("apis"):
+        s = s[:-1]
+    return SKILL_ALIASES.get(s, s)
+
+
+@lru_cache(maxsize=2048)
+def _skill_text_pattern(normalized: str) -> "re.Pattern":
+    variants = {normalized} | {alias for alias, canon in SKILL_ALIASES.items() if canon == normalized}
+    alt = "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True))
+    # alphanumeric-boundary (not \\b) so tokens like "c++", "node.js", "ci/cd" match whole.
+    # An optional version suffix and plural 's' are tolerated: "Camunda 8", "REST APIs".
+    return re.compile(rf"(?<![a-z0-9])(?:{alt})(?:s)?(?![a-z0-9])", re.I)
+
+
+def compute_skill_overlap(candidate_skills: List[str], target_skills: List[str], resume_text: Optional[str] = None) -> Tuple[float, List[str], List[str]]:
     """
-    Computes Jaccard / coverage skill overlap score in [0.0, 1.0].
-    Returns (overlap_ratio, matched_skills, missing_skills).
+    Coverage of the required skills in [0.0, 1.0]. A required skill counts as matched when it is in
+    the candidate's extracted skills (after normalization) OR appears in the resume text itself - so a
+    skill the parser missed (or spelled differently) still counts for a candidate who clearly has it.
+    Returns (coverage, matched_skills, missing_skills).
     """
     if not target_skills:
         return 1.0 if candidate_skills else 0.5, candidate_skills, []
 
-    cand_set = {s.lower() for s in candidate_skills}
-    target_set = {s.lower() for s in target_skills}
-
-    matched = cand_set.intersection(target_set)
-    missing = target_set.difference(cand_set)
-
-    # Coverage ratio of required skills
-    coverage = len(matched) / len(target_set) if target_set else 0.0
-
-    # Retrieve original casing for presentation
-    matched_names = [s for s in target_skills if s.lower() in matched]
-    missing_names = [s for s in target_skills if s.lower() in missing]
-
+    cand_norm = {normalize_skill(s) for s in candidate_skills}
+    text = resume_text or ""
+    matched_names, missing_names, seen = [], [], set()
+    for skill in target_skills:
+        norm = normalize_skill(skill)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        if norm in cand_norm or (text and _skill_text_pattern(norm).search(text)):
+            matched_names.append(skill)
+        else:
+            missing_names.append(skill)
+    total = len(matched_names) + len(missing_names)
+    coverage = len(matched_names) / total if total else 0.0
     return round(coverage, 2), matched_names, missing_names
+
+
+def candidate_has_skills(candidate_skills: List[str], required: List[str], resume_text: Optional[str] = None) -> bool:
+    """All-of check used by explicit skill-chip filters (same normalization + text fallback)."""
+    cov, _, missing = compute_skill_overlap(candidate_skills, required, resume_text)
+    return not missing
 
 
 def calculate_hybrid_score(
@@ -88,7 +134,9 @@ def calculate_hybrid_score(
     jd_title: str,
     jd_text: str,
     target_skills: Optional[List[str]] = None,
-    required_exp: Optional[float] = None
+    required_exp: Optional[float] = None,
+    skill_coverage_fallback: Optional[float] = None,
+    candidate_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Calculates hybrid score:
@@ -103,7 +151,11 @@ def calculate_hybrid_score(
         required_exp = extract_required_experience(jd_text)
 
     # 2. Skill overlap
-    skill_coverage, matched_skills, missing_skills = compute_skill_overlap(candidate_skills, target_skills)
+    skill_coverage, matched_skills, missing_skills = compute_skill_overlap(candidate_skills, target_skills, candidate_text)
+    if not target_skills and skill_coverage_fallback is not None:
+        # No skills to measure against (free-text query): use lexical relevance rather than
+        # handing every candidate a free 100% skill score.
+        skill_coverage = max(0.0, min(1.0, skill_coverage_fallback))
 
     # 3. Experience penalty
     exp_penalty = 0.0
