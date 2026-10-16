@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { History, Search, RefreshCw, CheckCircle2, Copy, XCircle, Clock } from 'lucide-react';
 import { ingestionApi } from '../lib/api';
+import PageBreadcrumbs from '../components/PageBreadcrumbs';
+import { fromState, useBackNavigation, HISTORY_QUERY_KEY } from '../lib/navigation';
 
 const WINDOWS = [
   { label: '10 min', minutes: 10 },
@@ -27,6 +29,15 @@ const STATUS_META = {
 };
 
 const PAGE_SIZE = 25;
+const DEFAULT_MINUTES = 1440;
+
+// Filters live in the URL (?window=&status=&q=&page=) so browser Back/Forward, refresh and
+// direct links all reopen the same view.
+function minutesFromParam(value) {
+  if (value === 'all') return null;
+  const match = WINDOWS.find(w => w.minutes != null && String(w.minutes) === value);
+  return match ? match.minutes : DEFAULT_MINUTES;
+}
 
 function timeAgo(iso) {
   if (!iso) return '';
@@ -38,20 +49,58 @@ function timeAgo(iso) {
 }
 
 export default function IngestionHistoryPage() {
-  const [minutes, setMinutes] = useState(1440);
-  const [status, setStatus] = useState('all');
-  const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [page, setPage] = useState(0);
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { goBack, backLabel } = useBackNavigation('/ingestion', 'Ingestion');
+
+  const minutes = minutesFromParam(searchParams.get('window'));
+  const statusParam = searchParams.get('status');
+  const status = STATUS_FILTERS.some(f => f.key === statusParam) ? statusParam : 'all';
+  const debouncedQuery = (searchParams.get('q') || '').trim();
+  const page = Math.max(0, (parseInt(searchParams.get('page'), 10) || 1) - 1);
+
+  const [query, setQuery] = useState(debouncedQuery);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  // Filter changes replace the current history entry (no duplicate entries per click/keystroke)
+  // and keep the router state so "Back to ..." still knows where the user came from.
+  const updateFilters = useCallback((changes) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      Object.entries(changes).forEach(([key, value]) => {
+        if (value == null || value === '') next.delete(key);
+        else next.set(key, String(value));
+      });
+      return next;
+    }, { replace: true, state: location.state });
+  }, [setSearchParams, location.state]);
+
+  const setMinutes = (m) => updateFilters({ window: m === null ? 'all' : (m === DEFAULT_MINUTES ? null : m), page: null });
+  const setStatus = (key) => updateFilters({ status: key === 'all' ? null : key, page: null });
+  const setPage = (updater) => {
+    const nextPage = typeof updater === 'function' ? updater(page) : updater;
+    updateFilters({ page: nextPage > 0 ? nextPage + 1 : null });
+  };
+
   useEffect(() => {
-    const t = setTimeout(() => { setDebouncedQuery(query.trim()); setPage(0); }, 300);
+    const t = setTimeout(() => {
+      if (query.trim() !== debouncedQuery) updateFilters({ q: query.trim() || null, page: null });
+    }, 300);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, debouncedQuery, updateFilters]);
+
+  // Keep the search box in sync when the URL changes from outside (e.g. browser Back/Forward).
+  useEffect(() => {
+    setQuery(q => (q.trim() === debouncedQuery ? q : debouncedQuery));
+  }, [debouncedQuery]);
+
+  // Remember the current filters so the "Ingestion History" button reopens this view.
+  useEffect(() => {
+    try { sessionStorage.setItem(HISTORY_QUERY_KEY, location.search); } catch { /* storage unavailable */ }
+  }, [location.search]);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -81,6 +130,11 @@ export default function IngestionHistoryPage() {
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  // A stale ?page= (e.g. after records were removed) falls back to the last page that exists.
+  useEffect(() => {
+    if (data && page > 0 && page >= pages) setPage(pages - 1);
+  }, [data, page, pages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const chip = (active) => ({
     padding: '0.4rem 0.85rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
     border: `1px solid ${active ? 'var(--primary)' : 'var(--border-color)'}`,
@@ -90,6 +144,11 @@ export default function IngestionHistoryPage() {
 
   return (
     <div className="page-body">
+      <PageBreadcrumbs
+        onBack={goBack}
+        backLabel={backLabel}
+        items={[{ label: 'Ingestion', to: '/ingestion' }, { label: 'Ingestion History' }]}
+      />
       <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 className="page-header-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
@@ -114,7 +173,7 @@ export default function IngestionHistoryPage() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginBottom: '0.9rem' }}>
           <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginRight: '0.25rem' }}>Ingested in the last</span>
           {WINDOWS.map(w => (
-            <button key={w.label} onClick={() => { setMinutes(w.minutes); setPage(0); }} style={chip(minutes === w.minutes)}>{w.label}</button>
+            <button key={w.label} onClick={() => setMinutes(w.minutes)} style={chip(minutes === w.minutes)}>{w.label}</button>
           ))}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
@@ -125,9 +184,9 @@ export default function IngestionHistoryPage() {
               placeholder="Search file name, candidate or ID..." style={{ paddingLeft: '36px' }}
             />
           </div>
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
             {STATUS_FILTERS.map(f => (
-              <button key={f.key} onClick={() => { setStatus(f.key); setPage(0); }} style={chip(status === f.key)}>
+              <button key={f.key} onClick={() => setStatus(f.key)} style={chip(status === f.key)}>
                 {f.label}{f.key !== 'all' ? ` (${counts[f.key] ?? 0})` : ''}
               </button>
             ))}
@@ -169,7 +228,7 @@ export default function IngestionHistoryPage() {
                     </td>
                     <td style={{ padding: '0.7rem 1rem' }}>
                       {row.candidate_id ? (
-                        <Link to={`/candidates/${row.candidate_id}`} style={{ color: 'var(--primary)', fontWeight: 600, textDecoration: 'none' }}>
+                        <Link to={`/candidates/${row.candidate_id}`} state={fromState(location, 'Ingestion History')} style={{ color: 'var(--primary)', fontWeight: 600, textDecoration: 'none' }}>
                           {row.candidate_name}
                           <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-subtle)', fontWeight: 500 }}>{row.display_id}</span>
                         </Link>

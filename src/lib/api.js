@@ -28,7 +28,9 @@ api.interceptors.response.use(
         clearRequestCache();
         localStorage.removeItem('truhire_token');
         localStorage.removeItem('truhire_user');
-        window.location.href = '/login';
+        // Keep the current page so signing back in returns here instead of the default section.
+        const next = `${window.location.pathname}${window.location.search}`;
+        window.location.href = `/login?next=${encodeURIComponent(next)}`;
       }
     }
     return Promise.reject(error);

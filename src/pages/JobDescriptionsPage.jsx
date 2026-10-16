@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { fromState } from '../lib/navigation';
 import {
   FileText,
   Plus,
@@ -26,6 +27,7 @@ import EmailComposer, { RecipientSelector, REQUIREMENT_STATUSES, EmailStatusBadg
 const ACCEPTED_FILE_TYPES = ".pdf,.docx,.doc,.txt,.rtf,.odt,.md,.jpg,.jpeg,.png,.webp,.bmp,.tiff,.tif,.jfif";
 
 export default function JobDescriptionsPage() {
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [jds, setJds] = useState([]);
   const [selectedJd, setSelectedJd] = useState(null);
@@ -897,6 +899,7 @@ export default function JobDescriptionsPage() {
 
                             <Link
                               to={`/candidates/${cand.id}`}
+                              state={fromState(location, 'Requirements')}
                               className="btn btn-primary"
                               style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}
                             >

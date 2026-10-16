@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // The backend can run on any host/port. Nothing is hardcoded here: tell the dev server where
-// it is with ONE of these (in frontend/.env or inline in the shell):
+// it is with ONE of these (in the root .env or inline in the shell):
 //   VITE_BACKEND_URL=http://127.0.0.1:9001       full URL (any host, https allowed)
 //   VITE_BACKEND_PORT=9001                        port only; host defaults to 127.0.0.1 (VITE_BACKEND_HOST to change)
 // e.g.  VITE_BACKEND_PORT=9001 npm run dev
@@ -14,7 +14,7 @@ function pick(env) {
   return null
 }
 
-// Shell variables win over frontend/.env, so the backend can be switched per run.
+// Shell variables win over .env, so the backend can be switched per run.
 function resolveBackendUrl(fileEnv) {
   const url = pick(process.env) || pick(fileEnv)
   if (url) return url

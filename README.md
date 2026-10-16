@@ -151,14 +151,35 @@ changing the underlying deterministic scoring formulas.
 
 ```
 backend/
-  routers/        # FastAPI route handlers
-  services/        # Business logic: search, scoring, decision layer, guardrails,
-                    # LLM/embedding client, PII redaction, caching
-  models.py         # SQLAlchemy models
-  config.py         # Environment-driven settings
-frontend/
-  src/              # React application
+  main.py             # FastAPI app, middleware, router registration
+  config.py           # Environment-driven settings (.env)
+  models.py           # SQLAlchemy models
+  auth.py             # Password hashing, JWT issuing, current-user dependency
+  worker.py           # arq background worker (optional ingestion queue)
+  routers/            # FastAPI route handlers (auth, ingestion, search, chat, email, ...)
+  services/
+    ingestion/        # Resume/JD parsing, chunking, PII redaction, injection screening, storage
+    retrieval/        # Qdrant + OpenSearch clients, hybrid search, scoring, reranker
+    llm/              # vLLM client, local embeddings, Laya decision layer, guardrails, RAG
+    common/           # Cache, AI audit trail, email delivery, export, retention, observability
+  evaluation/         # Retrieval evaluation metrics
+  scripts/            # Maintenance CLIs (eval, SQLite->Postgres migration, injection scan)
+src/                  # React application (pages, components, context, API client)
+tests/                # pytest suite + frontend unit test
+eval/                 # Example retrieval-evaluation dataset
+docker-compose.yml    # Local OpenSearch + Dashboards
 ```
+
+## Running Tests
+
+```bash
+uv sync --group dev
+uv run pytest           # backend tests
+npm test                # frontend request-cache test
+```
+
+The backend tests use a separate `<db>_test` PostgreSQL database (created
+automatically from `DATABASE_URL`), so they never touch real data.
 
 ## Troubleshooting
 
@@ -166,7 +187,11 @@ frontend/
   `VLLM_EMBEDDING_MODEL` (or `EMBEDDING_MODEL`) to a real embedding model
   served by your LLM endpoint; a chat-only model will not work.
 - **Frontend requests fail with connection errors** — confirm the backend is
-  running and that its port matches `frontend/vite.config.js`'s proxy target.
+  running and that `VITE_BACKEND_PORT` / `VITE_BACKEND_URL` points at it.
+- **Login works but every other request returns 401** — the browser token was
+  signed with a different `SECRET_KEY`; log out and log back in.
+- **`password authentication failed` on startup** — the credentials in
+  `DATABASE_URL` are wrong (remember to URL-encode special characters).
 - **Stale or incompatible vectors after changing the embedding model** — use a
   fresh Qdrant collection (or clear the existing one) and run
   `POST /api/ingest/reindex`.

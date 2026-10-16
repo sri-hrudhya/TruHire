@@ -119,7 +119,8 @@ button, input, select, textarea {
 }
 
 .sidebar {
-  width: 260px;
+  --sidebar-width: 260px;
+  width: var(--sidebar-width);
   background-color: var(--bg-surface);
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -128,6 +129,13 @@ button, input, select, textarea {
   height: 100vh;
   position: sticky;
   top: 0;
+  z-index: 20; /* above page content so collapsed-mode tooltips are not covered */
+  transition: width 0.2s ease, transform 0.25s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.sidebar-nav,
+.sidebar-footer {
+  overflow-x: hidden;
 }
 
 .sidebar-brand {
@@ -136,6 +144,45 @@ button, input, select, textarea {
   align-items: center;
   gap: 0.75rem;
   border-bottom: 1px solid var(--border-color);
+  position: relative;
+}
+
+.sidebar:not(.collapsed) .sidebar-brand {
+  padding-right: 0.75rem;
+  gap: 0.6rem;
+}
+
+.sidebar-brand-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover,
+.icon-btn:hover {
+  background-color: var(--bg-subtle);
+  color: var(--text-main);
+}
+
+.sidebar .sidebar-mobile-close {
+  display: none;
+}
+
+.sidebar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
 }
 
 .sidebar-brand-icon {
@@ -182,11 +229,105 @@ button, input, select, textarea {
   transition: all 0.15s ease;
 }
 
+.sidebar-link {
+  position: relative;
+}
+
+.sidebar-link:hover {
+  color: var(--text-main);
+  background-color: var(--bg-subtle);
+}
+
+.sidebar-link .sidebar-icon {
+  flex-shrink: 0;
+}
+
 .sidebar-link.active {
   font-weight: 700;
   color: var(--primary);
   background-color: var(--primary-light);
   border-color: var(--primary-border);
+}
+
+.sidebar-link:focus-visible,
+.sidebar-toggle:focus-visible,
+.theme-toggle:focus-visible,
+.icon-btn:focus-visible,
+.back-link:focus-visible,
+.breadcrumb-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Collapsed sidebar (desktop only): icons only, labels via tooltip + aria-label */
+@media (min-width: 769px) {
+  .sidebar.collapsed {
+    --sidebar-width: 76px;
+  }
+
+  .sidebar.collapsed .sidebar-label,
+  .sidebar.collapsed .sidebar-nav-label {
+    display: none;
+  }
+
+  .sidebar.collapsed .sidebar-brand {
+    flex-direction: column;
+    padding: 1.25rem 0.5rem;
+    gap: 0.6rem;
+  }
+
+  .sidebar.collapsed .sidebar-nav {
+    padding: 1.25rem 0.75rem;
+  }
+
+  .sidebar.collapsed .sidebar-link {
+    justify-content: center;
+    padding: 0.75rem 0;
+  }
+
+  .sidebar.collapsed .sidebar-footer {
+    padding: 1rem 0.75rem;
+    align-items: center;
+  }
+
+  .sidebar.collapsed .theme-toggle {
+    justify-content: center;
+    padding: 0.5rem 0;
+  }
+
+  .sidebar.collapsed .sidebar-user {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .sidebar.collapsed [data-tooltip] {
+    position: relative;
+  }
+
+  .sidebar.collapsed [data-tooltip]:hover::after,
+  .sidebar.collapsed [data-tooltip]:focus-visible::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 0.35rem 0.6rem;
+    border-radius: var(--radius-sm);
+    background-color: var(--text-main);
+    color: var(--bg-surface);
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    box-shadow: var(--shadow-md);
+    pointer-events: none;
+    z-index: 30;
+  }
+
+  /* Tooltips must escape the sidebar's clipped scroll areas while collapsed. */
+  .sidebar.collapsed .sidebar-nav,
+  .sidebar.collapsed .sidebar-footer {
+    overflow: visible;
+  }
 }
 
 .sidebar-footer {
@@ -361,6 +502,163 @@ button, input, select, textarea {
   flex-direction: column;
   min-width: 0;
   overflow-x: hidden;
+}
+
+/* Breadcrumbs / Back navigation for subviews */
+.page-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  color: var(--primary);
+}
+
+.breadcrumb-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  font-size: 0.8125rem;
+  min-width: 0;
+}
+
+.breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.breadcrumb-link {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: inherit;
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.breadcrumb-link:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.breadcrumb-current {
+  color: var(--text-main);
+  font-weight: 600;
+  max-width: 320px;
+}
+
+.breadcrumb-sep {
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+
+/* Two equal columns that stack on narrow screens */
+.responsive-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.navbar .mobile-menu-btn {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+/* Small screens: the sidebar becomes an off-canvas drawer opened from the navbar */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 60;
+    transform: translateX(-100%);
+    box-shadow: none;
+    /* Hidden drawer must not be reachable by Tab; visibility flips after the slide-out. */
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0s linear 0.25s;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+    box-shadow: var(--shadow-lg);
+    visibility: visible;
+    transition: transform 0.25s ease, visibility 0s;
+  }
+
+  .sidebar .sidebar-collapse-toggle {
+    display: none;
+  }
+
+  .sidebar .sidebar-mobile-close {
+    display: flex;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background-color: rgba(15, 23, 42, 0.45);
+    z-index: 55;
+  }
+
+  .navbar .mobile-menu-btn {
+    display: flex;
+  }
+
+  .navbar {
+    padding: 0 1rem;
+  }
+
+  .navbar-subtitle,
+  .navbar-chat-label {
+    display: none;
+  }
+
+  .page-body {
+    padding: 1.25rem 1rem;
+  }
+
+  .responsive-2col {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-window {
+    width: calc(100vw - 2rem);
+    right: 1rem;
+    bottom: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 
 .page-body {

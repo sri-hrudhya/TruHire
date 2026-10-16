@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Sparkles, Lock, Mail, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_ROUTE, safeAppPath } from '../lib/navigation';
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -13,6 +14,10 @@ export default function AuthPage() {
 
   const { login, register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  // Return to the page that required login (router redirect state, or ?next= from an expired session).
+  const destination = safeAppPath(location.state?.from?.path) || safeAppPath(searchParams.get('next')) || DEFAULT_ROUTE;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,7 +30,7 @@ export default function AuthPage() {
       } else {
         await register(email, name, password);
       }
-      navigate('/ingestion');
+      navigate(destination, { replace: true });
     } catch (err) {
       setError(err.response?.data?.detail || 'Authentication failed. Please check your credentials.');
     } finally {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   Mail,
   Phone,
@@ -7,14 +7,17 @@ import {
   Briefcase,
   FileText,
   Sparkles,
-  ArrowLeft
 } from 'lucide-react';
 import { candidatesApi } from '../lib/api';
 import AIChatWindow from '../components/AIChatWindow';
 import ResumePreviewModal from '../components/ResumePreviewModal';
+import PageBreadcrumbs from '../components/PageBreadcrumbs';
+import { useBackNavigation } from '../lib/navigation';
 
 export default function CandidateDetailPage() {
   const { id } = useParams();
+  // Back returns to wherever the profile was opened from (Search, Requirements, Ingestion History).
+  const { goBack, backLabel } = useBackNavigation('/search', 'Search');
   const [candidate, setCandidate] = useState(null);
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,6 +27,7 @@ export default function CandidateDetailPage() {
 
   useEffect(() => {
     const loadCandidateData = async () => {
+      setLoading(true);
       try {
         const [candRes, matchesRes] = await Promise.all([
           candidatesApi.get(id),
@@ -64,9 +68,9 @@ export default function CandidateDetailPage() {
     return (
       <div className="page-body" style={{ textAlign: 'center', padding: '4rem' }}>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Candidate not found</h2>
-        <Link to="/search" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-          Return to Search
-        </Link>
+        <button type="button" onClick={goBack} className="btn btn-primary" style={{ marginTop: '1rem' }}>
+          Return to {backLabel}
+        </button>
       </div>
     );
   }
@@ -74,21 +78,14 @@ export default function CandidateDetailPage() {
   return (
     <div className="page-body">
       {/* Back button */}
-      <Link
-        to="/search"
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          fontSize: '0.8125rem',
-          fontWeight: 600,
-          color: 'var(--text-muted)',
-          textDecoration: 'none',
-          marginBottom: '1.5rem'
-        }}
-      >
-        <ArrowLeft size={16} /> Back to Search
-      </Link>
+      <PageBreadcrumbs
+        onBack={goBack}
+        backLabel={backLabel}
+        items={[
+          { label: backLabel, onClick: goBack },
+          { label: candidate.candidate_name || candidate.display_id || 'Candidate' },
+        ]}
+      />
 
       {statusMessage && (
         <div className="badge-success" style={{ padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>

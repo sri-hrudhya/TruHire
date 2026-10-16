@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 
@@ -15,11 +15,50 @@ import SearchPage from './pages/SearchPage';
 import CandidateDetailPage from './pages/CandidateDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import EmailPage from './pages/EmailPage';
+import { DEFAULT_ROUTE } from './lib/navigation';
+
+const SIDEBAR_PREF_KEY = 'truhire_sidebar_collapsed';
+
+function readSidebarPref() {
+  try {
+    return localStorage.getItem(SIDEBAR_PREF_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 // Protected layout wrapper
 function ProtectedLayout() {
   const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
+  // Desktop: collapsed (icons only) vs expanded; remembered across navigation and reloads.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarPref);
+  // Small screens: the sidebar is an off-canvas drawer.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_PREF_KEY, sidebarCollapsed ? '1' : '0');
+    } catch {
+      // Storage unavailable (private mode): the preference just lasts for this session.
+    }
+  }, [sidebarCollapsed]);
+
+  // Close the mobile drawer after any navigation (link click, browser Back/Forward).
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setMobileNavOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileNavOpen]);
+
+  const toggleSidebar = useCallback(() => setSidebarCollapsed((c) => !c), []);
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
 
   if (loading) {
     return (
@@ -30,17 +69,26 @@ function ProtectedLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Remember where the user was headed so login can return them there.
+    return <Navigate to="/login" replace state={{ from: { path: `${location.pathname}${location.search}` } }} />;
   }
 
   return (
     <div className="app-container">
-      <Sidebar />
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebar}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={closeMobileNav}
+      />
+      {mobileNavOpen && <div className="sidebar-backdrop" onClick={closeMobileNav} aria-hidden="true" />}
       <div className="main-content">
         <Navbar
           title="TruHire"
           subtitle="AI-Powered Recruitment & Candidate Search"
           onOpenChat={() => setIsCopilotOpen(true)}
+          onOpenMenu={() => setMobileNavOpen(true)}
+          menuOpen={mobileNavOpen}
         />
         <Outlet />
         <AIChatWindow
@@ -62,7 +110,7 @@ export default function App() {
             <Route path="/login" element={<AuthPage />} />
 
             <Route element={<ProtectedLayout />}>
-              <Route path="/" element={<Navigate to="/ingestion" replace />} />
+              <Route path="/" element={<Navigate to={DEFAULT_ROUTE} replace />} />
               <Route path="/ingestion" element={<IngestionPage />} />
               <Route path="/ingestion/history" element={<IngestionHistoryPage />} />
               <Route path="/requirements" element={<JobDescriptionsPage />} />
@@ -74,7 +122,7 @@ export default function App() {
               <Route path="/analytics" element={<AnalyticsPage />} />
             </Route>
 
-            <Route path="*" element={<Navigate to="/ingestion" replace />} />
+            <Route path="*" element={<Navigate to={DEFAULT_ROUTE} replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

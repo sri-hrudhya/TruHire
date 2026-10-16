@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
+import { fromState } from '../lib/navigation';
 import {
   Search,
   X,
@@ -18,6 +19,7 @@ import { searchApi, jdApi, candidatesApi, exportApi } from '../lib/api';
 import ResumePreviewModal from '../components/ResumePreviewModal';
 
 export default function SearchPage() {
+  const location = useLocation();
   const [query, setQuery] = useState('');
   const [filterChips, setFilterChips] = useState([]);
   const [minExp, setMinExp] = useState('');
@@ -428,6 +430,7 @@ export default function SearchPage() {
                         )}
                         <Link
                           to={`/candidates/${cand.id}`}
+                          state={fromState(location, 'Search')}
                           style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--text-main)', textDecoration: 'none' }}
                         >
                           {cand.candidate_name}
@@ -493,6 +496,7 @@ export default function SearchPage() {
 
                     <Link
                       to={`/candidates/${cand.id}`}
+                      state={fromState(location, 'Search')}
                       className="btn btn-primary"
                       style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
                     >

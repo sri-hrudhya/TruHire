@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import {
   UploadCloud,
   FileText,
@@ -8,8 +9,27 @@ import {
   XCircle,
   Copy,
   Circle,
+  History,
 } from 'lucide-react';
 import { ingestionApi } from '../lib/api';
+import { fromState, HISTORY_QUERY_KEY } from '../lib/navigation';
+
+// The most recent upload in this tab, so its progress is still shown after visiting
+// Ingestion History (or any other section) and coming back.
+const LAST_UPLOAD_KEY = 'truhire_last_upload_batch';
+
+function readSession(key) {
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}
+
+function writeSession(key, value) {
+  try {
+    if (value) sessionStorage.setItem(key, value);
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Storage unavailable: progress simply isn't restored after navigating away.
+  }
+}
 
 // Per-file pipeline states reported live by the backend (see _Progress in routers/ingestion.py).
 const FILE_STATUS = {
@@ -55,7 +75,9 @@ export default function IngestionPage() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState(null);
-  const [activeUploadId, setActiveUploadId] = useState(null);
+  const location = useLocation();
+  // Resume polling (or show the final result of) the last upload made in this tab.
+  const [activeUploadId, setActiveUploadId] = useState(() => readSession(LAST_UPLOAD_KEY));
   const [uploadProgress, setUploadProgress] = useState(null);
   const [dragActive, setDragActive] = useState(false);
 
@@ -77,6 +99,13 @@ export default function IngestionPage() {
           setActiveUploadId(null);
         }
       } catch (err) {
+        if (cancelled) return;
+        // The batch no longer exists (or is not visible): stop polling instead of retrying forever.
+        if (err.response?.status === 404 || err.response?.status === 403) {
+          writeSession(LAST_UPLOAD_KEY, null);
+          setActiveUploadId(null);
+          return;
+        }
         console.error('Polling error:', err);
       }
     };
@@ -126,6 +155,7 @@ export default function IngestionPage() {
       const res = await ingestionApi.uploadResumes(formData);
       setUploadMessage({ type: 'success', text: `Uploaded ${selectedFiles.length} file(s). Processing in background...` });
       setActiveUploadId(res.data.batch_id);
+      writeSession(LAST_UPLOAD_KEY, res.data.batch_id);
       setUploadProgress({
         status: 'processing', stage: 'queued', total_files: res.data.total_files, processed_count: 0, duplicate_count: 0, failed_count: 0, error_log: [],
         file_status: selectedFiles.map(f => ({ filename: f.name, status: 'queued', detail: '' })),
@@ -153,23 +183,32 @@ export default function IngestionPage() {
             Upload candidates to the global shared talent pool. Automatic PII redaction, SHA-256 deduplication, and vector indexing.
           </p>
         </div>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          backgroundColor: 'var(--bg-subtle)',
-          color: 'var(--text-muted)',
-          border: '1px solid var(--border-color)',
-          borderRadius: '20px',
-          padding: '0.3rem 0.75rem'
-        }}>
-          <Clock size={13} color="var(--primary)" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            backgroundColor: 'var(--bg-subtle)',
+            color: 'var(--text-muted)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '20px',
+            padding: '0.3rem 0.75rem'
+          }}>
+            <Clock size={13} color="var(--primary)" />
+          </div>
+          <Link
+            to={`/ingestion/history${readSession(HISTORY_QUERY_KEY) || ''}`}
+            state={fromState(location, 'Ingestion')}
+            className="btn btn-secondary"
+          >
+            <History size={16} /> Ingestion History
+          </Link>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>
+      <div className="responsive-2col" style={{ gap: '2rem', alignItems: 'start' }}>
         {/* Left Column: Dropzone & Upload Action */}
         <div>
           <div className="card" style={{ marginBottom: '1.5rem' }}>
@@ -304,7 +343,7 @@ export default function IngestionPage() {
               <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                 Upload Progress
               </h3>
-              {activeUploadId && (
+              {activeUploadId && uploadProgress?.status === 'processing' && (
                 <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                   <RefreshCw size={12} /> Processing
                 </span>
