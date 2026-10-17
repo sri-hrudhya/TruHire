@@ -45,6 +45,26 @@ class Settings(BaseSettings):
     VLLM_EMBEDDING_BASE_URL: Optional[str] = None
     VLLM_EMBEDDING_API_KEY: Optional[str] = None
 
+    # ── Cloud LLM fallback providers (chat only; embeddings use local fastembed) ──
+    # Used by backend/services/llm/router.py when vLLM (DGX) is unreachable.
+    # Priority: vLLM → OpenRouter → Groq → Gemini.
+
+    # OpenRouter — 1st fallback. Routes to any model via a single API key.
+    OPENROUTER_API_KEY_1: Optional[str] = None
+    OPENROUTER_API_KEY_2: Optional[str] = None
+    OPENROUTER_CHAT_MODEL: str = "openai/gpt-4o-mini"  # override via .env
+
+    # Groq — 2nd fallback. Ultra-fast inference for Llama / Mixtral models.
+    GROQ_API_KEY_1: Optional[str] = None
+    GROQ_API_KEY_2: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
+
+    # Gemini — 3rd fallback. Three keys for high rate-limit headroom.
+    GEMINI_API_KEY_1: Optional[str] = None
+    GEMINI_API_KEY_2: Optional[str] = None
+    GEMINI_API_KEY_3: Optional[str] = None
+    GEMINI_CHAT_MODEL: str = "gemini-2.0-flash-lite"  # override via .env
+
     # Vector database. Required, no default - same reasoning as VLLM_BASE_URL above.
     QDRANT_URL: str
     QDRANT_API_KEY: Optional[str] = None
@@ -156,6 +176,9 @@ class Settings(BaseSettings):
 
     ANALYTICS_TOP_SKILLS: int = 20
     CACHE_TTL_QUERY: int = 60
+    # Scored requirement->candidate matches are expensive (embedding + retrieval + rerankers). They are keyed by
+    # JD version and index epoch, so they self-invalidate on any change and can safely live long.
+    CACHE_TTL_MATCHES: int = 86400
     CACHE_TTL_SESSION: int = 86400  # 24 hours for user authentication sessions
 
     # Redis connection settings

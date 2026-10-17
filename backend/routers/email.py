@@ -69,8 +69,22 @@ def _serialize_record(r: EmailRecord) -> dict:
     }
 
 
+EMAILABLE_STATUSES = ("Shortlisted", "Not Shortlisted")
+
+
+def _match_scores(db: Session, position_id: str, candidate_ids: List[str]) -> dict:
+    """Latest persisted match % per candidate for this requirement (shown to the recruiter, never put in the email)."""
+    if not candidate_ids:
+        return {}
+    rows = db.query(CandidateMatch.candidate_id, CandidateMatch.match_score).filter(
+        CandidateMatch.position_id == position_id, CandidateMatch.candidate_id.in_(candidate_ids)
+    ).all()
+    return {cid: score for cid, score in rows}
+
+
 def _shortlisted_candidates(db: Session, position_id: str, candidate_ids: List[str]):
-    """Returns ({id: Candidate} for shortlisted ids, [rejection dicts] for the rest)."""
+    """Returns ({id: Candidate} for emailable ids, [rejection dicts] for the rest). Emailable means the
+    recruiter has made a decision: Shortlisted (invitation) or Not Shortlisted (polite regret)."""
     ids = list(dict.fromkeys(candidate_ids))
     found = {c.id: c for c in db.query(Candidate).filter(Candidate.id.in_(ids)).all()}
     statuses = requirement_statuses(db, position_id, ids)
@@ -79,8 +93,8 @@ def _shortlisted_candidates(db: Session, position_id: str, candidate_ids: List[s
         cand = found.get(cid)
         if cand is None:
             rejected.append({"candidate_id": cid, "reason": "Candidate not found."})
-        elif statuses.get(cid) != "Shortlisted":
-            rejected.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": "Candidate is not Shortlisted for this requirement."})
+        elif statuses.get(cid) not in EMAILABLE_STATUSES:
+            rejected.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": "Set the candidate to Shortlisted or Not Shortlisted for this requirement before emailing."})
         elif not (cand.email or "").strip():
             rejected.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": "Candidate has no email address."})
         else:
@@ -108,6 +122,8 @@ def generate_emails(req: EmailGenerateRequest, db: Session = Depends(get_db), us
         ).all()
     }
 
+    statuses = requirement_statuses(db, pos.id, list(eligible))
+    scores = _match_scores(db, pos.id, list(eligible))
     drafts, errors = [], list(rejected)
     for cid, cand in eligible.items():
         try:
@@ -124,6 +140,7 @@ def generate_emails(req: EmailGenerateRequest, db: Session = Depends(get_db), us
                 recruiter_name=user.name,
                 company_name=settings.COMPANY_NAME,
                 company_description=settings.COMPANY_DESCRIPTION,
+                outcome="shortlisted" if statuses.get(cid) == "Shortlisted" else "not_shortlisted",
             )
         except EmailGenerationError as exc:
             errors.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": str(exc), "retryable": True})
@@ -133,6 +150,8 @@ def generate_emails(req: EmailGenerateRequest, db: Session = Depends(get_db), us
             "candidate_display_id": cand.display_id,
             "candidate_name": cand.candidate_name,
             "recipient_email": cand.email,
+            "outcome": "shortlisted" if statuses.get(cid) == "Shortlisted" else "not_shortlisted",
+            "match_score": scores.get(cid),
             "subject": generated["subject"],
             "body": generated["body"],
             "generated_at": datetime.utcnow().isoformat(),
@@ -265,7 +284,8 @@ def email_history_for_role(position_id: str, db: Session = Depends(get_db), user
         .order_by(EmailRecord.created_at.desc())
         .all()
     )
-    data = {"position_id": position_id, "records": [_serialize_record(r) for r in records]}
+    scores = _match_scores(db, position_id, [r.candidate_id for r in records if r.candidate_id])
+    data = {"position_id": position_id, "records": [{**_serialize_record(r), "match_score": scores.get(r.candidate_id)} for r in records]}
     set_cache(cache_key, data, ttl_seconds=settings.CACHE_TTL_QUERY)
     return data
 

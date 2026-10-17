@@ -38,6 +38,8 @@ def _serialize_candidate(c: Candidate) -> Dict[str, Any]:
         "extracted_skills": c.extracted_skills or [],
         "years_experience": c.years_experience,
         "education": c.education,
+        "location": c.location,
+        "job_titles": c.job_titles or [],
         "resume_text": c.resume_text,
         "status": c.status,
         "status_updated_by": c.status_updated_by,

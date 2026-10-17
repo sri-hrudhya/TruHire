@@ -25,7 +25,7 @@ const TTL_RULES = [
   [/^\/auth\/me/, 120000],
   [/^\/analytics\//, 60000],
   [/^\/retention\/status/, 60000],
-  [/^\/job-descriptions\/[^/]+\/matches/, 45000],
+  [/^\/job-descriptions\/[^/]+\/matches/, 300000],
   [/^\/job-descriptions/, 60000],
   [/^\/candidates\/[^/]+\/matches/, 45000],
   [/^\/candidates/, 60000],
@@ -40,7 +40,8 @@ const INVALIDATION = [
   [/^\/job-descriptions/, [/^\/job-descriptions/, /^\/analytics/, /^\/email\/history/, /^\/candidates/, /^\/search\/state/]],
   [/^\/candidates/, [/^\/candidates/, /^\/job-descriptions/, /^\/analytics/]],
   [/^\/search/, [/^\/search\/state/]],
-  [/^\/email/, [/^\/email\/history/]],
+  // sending/retrying emails changes last_email shown in the requirement match lists too
+  [/^\/email/, [/^\/email\/history/, /^\/job-descriptions/]],
 ];
 
 const ttlFor = (url) => {
@@ -98,6 +99,10 @@ export function cachingAdapter(config) {
 
   const request = defaultAdapter(config)
     .then((response) => {
+      // A scoring run where a retrieval source was down must not be pinned in the cache: the next
+      // request should see the recovered service instead of a stale "keyword search unavailable" result.
+      const r = response.data?.retrieval;
+      if (r && !(r.vector && r.lexical)) return response;
       store.set(key, { at: Date.now(), ttl, response: { ...response, data: clone(response.data), request: undefined, config: undefined } });
       return response;
     })

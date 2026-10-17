@@ -168,7 +168,7 @@ def stub_retrieval(monkeypatch):
     """Real execute_candidate_search; only external services are stubbed."""
     pool = {"vector": []}
     monkeypatch.setattr(search_module, "generate_embedding", lambda text: [0.1, 0.2])
-    monkeypatch.setattr(search_module, "search_vectors", lambda vec, k: list(pool["vector"]))
+    monkeypatch.setattr(search_module, "search_vectors", lambda vec, k, filters=None: list(pool["vector"]))
     monkeypatch.setattr(search_module, "search_lexical", lambda *a, **k: [])
     monkeypatch.setattr(search_module, "extract_skills_from_jd", lambda text: ["Python", "FastAPI"])
     monkeypatch.setattr(search_module.decision, "rerank_scores_batch", lambda items: [(s, None) for s, _, _ in items])

@@ -50,8 +50,12 @@ const newKey = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `
  * Candidate table with selection. Only candidates Shortlisted for the requirement and
  * having an email address can be selected.
  */
-export function RecipientSelector({ candidates, selectedIds, onChange }) {
-  const selectable = candidates.filter((c) => c.requirement_status === 'Shortlisted' && c.email);
+// Shortlisted candidates get an invitation, Not Shortlisted candidates a polite regret email.
+export const EMAILABLE_STATUSES = ['Shortlisted', 'Not Shortlisted'];
+const canEmail = (c) => EMAILABLE_STATUSES.includes(c.requirement_status) && Boolean(c.email);
+
+export function RecipientSelector({ candidates, selectedIds, onChange, onStatusChange }) {
+  const selectable = candidates.filter(canEmail);
   const allSelected = selectable.length > 0 && selectable.every((c) => selectedIds.includes(c.id));
 
   const toggle = (id) => onChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]);
@@ -66,7 +70,7 @@ export function RecipientSelector({ candidates, selectedIds, onChange }) {
             disabled={!selectable.length}
             onChange={() => onChange(allSelected ? [] : selectable.map((c) => c.id))}
           />
-          Select all shortlisted ({selectable.length})
+          Select all decided ({selectable.length})
         </label>
         <span style={{ fontWeight: 700, color: 'var(--primary)' }}>{selectedIds.length} recipient{selectedIds.length === 1 ? '' : 's'} selected</span>
       </div>
@@ -85,7 +89,7 @@ export function RecipientSelector({ candidates, selectedIds, onChange }) {
           </thead>
           <tbody>
             {candidates.map((c) => {
-              const canSelect = c.requirement_status === 'Shortlisted' && Boolean(c.email);
+              const canSelect = canEmail(c);
               return (
                 <tr key={c.id} style={{ opacity: canSelect ? 1 : 0.6 }}>
                   <td>
@@ -94,14 +98,26 @@ export function RecipientSelector({ candidates, selectedIds, onChange }) {
                       checked={selectedIds.includes(c.id)}
                       disabled={!canSelect}
                       onChange={() => toggle(c.id)}
-                      title={canSelect ? '' : c.email ? 'Only Shortlisted candidates can be emailed' : 'No email address on file'}
+                      title={canSelect ? '' : c.email ? 'Set the status to Shortlisted or Not Shortlisted to email this candidate' : 'No email address on file'}
                     />
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 700 }}>{c.display_id || '—'}</td>
                   <td style={{ fontWeight: 600 }}>{c.candidate_name}</td>
                   <td style={{ color: c.email ? 'var(--text-muted)' : 'var(--warning-text)' }}>{c.email || 'No email'}</td>
                   <td>{typeof c.match_score === 'number' ? `${c.match_score.toFixed(1)}%` : '—'}</td>
-                  <td><RequirementStatusBadge status={c.requirement_status} /></td>
+                  <td>
+                    {onStatusChange ? (
+                      <select
+                        className="input-field"
+                        value={c.requirement_status || 'Pending Review'}
+                        onChange={(e) => onStatusChange(c.id, e.target.value)}
+                        aria-label={`Status of ${c.candidate_name}`}
+                        style={{ width: 'auto', fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      >
+                        {REQUIREMENT_STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
+                      </select>
+                    ) : <RequirementStatusBadge status={c.requirement_status} />}
+                  </td>
                   <td>{c.last_email ? <EmailStatusBadge status={c.last_email.status} /> : <span style={{ color: 'var(--text-subtle)' }}>—</span>}</td>
                 </tr>
               );
@@ -225,6 +241,12 @@ export default function EmailComposer({ position, recipients, onSent, onCancel }
                   <span className="badge badge-primary" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}>{r.display_id || '—'}</span>
                   <strong>{r.candidate_name}</strong>
                   <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>&lt;{r.email}&gt;</span>
+                  {typeof r.match_score === 'number' && (
+                    <span className="badge badge-neutral" style={{ fontSize: '0.7rem', fontWeight: 700 }} title="Match to this requirement (visible to you only, not included in the email)">
+                      {r.match_score.toFixed(1)}% match
+                    </span>
+                  )}
+                  <RequirementStatusBadge status={r.requirement_status} />
                   {d.result && <EmailStatusBadge status={d.result.status} />}
                   {d.result?.duplicate && <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>Already sent — not resent</span>}
                 </div>

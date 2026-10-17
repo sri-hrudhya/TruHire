@@ -51,7 +51,7 @@ def ctx(monkeypatch):
     db.commit()
     cand_ids = [c.id for c in cands]
 
-    def fake_search(db_, query_text="", filter_skills=None, min_experience=None, position_id=None, top_n=20):
+    def fake_search(db_, query_text="", filter_skills=None, min_experience=None, position_id=None, top_n=20, location=None, role=None):
         rows = db_.query(Candidate).filter(Candidate.id.in_(cand_ids)).all()
         by_id = {c.id: c for c in rows}
         return {"total_matches": len(SCORES), "results": [
@@ -261,7 +261,7 @@ def test_send_history_duplicates_and_simulation(ctx):
     # Not-shortlisted candidates are never emailed.
     rejected = client.post("/api/email/send", headers=headers, json={"position_id": jd["id"], "emails": [
         {"candidate_id": ctx["cands"][2], "subject": "x", "body": "y"}]}).json()
-    assert rejected["results"] == [] and "not Shortlisted" in rejected["skipped"][0]["reason"]
+    assert rejected["results"] == [] and "Set the candidate to Shortlisted or Not Shortlisted" in rejected["skipped"][0]["reason"]
 
     roles = {r["position_id"]: r for r in client.get("/api/email/history", headers=headers).json()["roles"]}
     role = roles[jd["id"]]

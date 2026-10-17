@@ -770,17 +770,24 @@ export default function JobDescriptionsPage() {
           {/* TAB 1: MATCHING CANDIDATES */}
           {!isCreating && activeTab === 'matches' && (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>
-                    Candidates Matching {selectedJd?.display_id}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+                  <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    <span>Candidates Matching</span>
+                    {selectedJd?.display_id ? (
+                      <span className="badge badge-primary" style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 800 }}>
+                        {selectedJd.display_id}
+                      </span>
+                    ) : (
+                      <span>{selectedJd?.title}</span>
+                    )}
                   </h4>
                   <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                     Candidates scoring {minMatchScore}% or higher, ranked by hybrid semantic similarity, skill coverage, and experience fit. Use Search to see the full ranked pool.
                   </p>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <button
                     type="button"
                     onClick={openEmailShortlisted}

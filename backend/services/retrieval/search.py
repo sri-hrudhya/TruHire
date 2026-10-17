@@ -17,6 +17,7 @@ from backend.services.retrieval.qdrant import search_vectors
 from backend.services.retrieval.opensearch import search_lexical
 from backend.services.retrieval.scoring import calculate_hybrid_score, extract_skills_from_jd, candidate_has_skills
 from backend.services.retrieval import reranker
+from backend.services.retrieval.filters import SearchFilters, NO_FILTERS, build_filters, candidate_matches, apply_sql_prefilter
 from backend.services.ingestion.chunking import chunk_text
 from backend.services.ingestion.parsing import COMMON_SKILLS, YEARS_EXP_PATTERN
 
@@ -121,13 +122,16 @@ def _candidate_payload(c: Candidate) -> Dict[str, Any]:
         "education": c.education, "status": c.status, "original_filename": c.original_filename,
         "uploaded_at": c.uploaded_at.isoformat() if c.uploaded_at else None,
         "resume_file_url": c.resume_file_url,
+        "location": c.location, "job_titles": c.job_titles or [],
     }
 
 
-def _search_cache_key(query_text: str, filter_skills: Optional[List[str]], min_experience: Optional[float], position_id: Optional[str], top_n: int) -> str:
+def _search_cache_key(query_text: str, filter_skills: Optional[List[str]], min_experience: Optional[float], position_id: Optional[str], top_n: int, filters: SearchFilters = NO_FILTERS) -> str:
     payload = json.dumps({
         "q": query_text.strip(), "skills": sorted(s.strip().lower() for s in (filter_skills or []) if s.strip()),
         "min_exp": min_experience, "position_id": position_id, "top_n": top_n,
+        # Normalized, so "Bangalore" and "Bengaluru" share an entry while any real change gets its own.
+        "filters": filters.cache_part(),
         # Any index write changes the epoch, so cached results never outlive the index state.
         "epoch": get_index_epoch(),
         "rerank": settings.RERANKER_ENABLED and settings.RERANKER_MODEL,
@@ -162,9 +166,33 @@ class _AdHocTarget:
         self.jd_version = base.jd_version if base else 0
 
 
-def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20) -> Dict[str, Any]:
+# Upper bound on candidates read by the relational fallback when a location/role filter is active.
+RELATIONAL_FILTER_WINDOW = 5000
+
+
+def _filter_report(db: Session, filters: SearchFilters, excluded_missing: int, excluded_mismatch: int) -> Optional[Dict[str, Any]]:
+    """What the location/role filters did, so an empty result is explainable (and missing resume
+    metadata is visible rather than silently treated as a non-match)."""
+    if not filters.active:
+        return None
+    report: Dict[str, Any] = {"location": filters.location, "role": filters.role, "location_key": filters.location_key,
+                              "role_tokens": list(filters.role_tokens),
+                              "excluded_missing_metadata": excluded_missing, "excluded_mismatch": excluded_mismatch}
+    if filters.location_key:
+        report["candidates_without_location"] = db.query(Candidate.id).filter(Candidate.location_norm.is_(None)).count()
+    if filters.role_tokens:
+        report["candidates_without_titles"] = db.query(Candidate.id).filter(Candidate.title_norms.is_(None)).count()
+    return report
+
+
+def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20, location: Optional[str] = None, role: Optional[str] = None) -> Dict[str, Any]:
     """Rank candidates against one requirement (JD). The query text and skill chips only
-    narrow / re-rank within that requirement; there is no requirement-less scoring."""
+    narrow / re-rank within that requirement; there is no requirement-less scoring.
+
+    `location` / `role` are hard eligibility filters: they are applied inside Qdrant and OpenSearch,
+    and again against PostgreSQL before any scoring, so rank fusion and rerankers only ever see
+    eligible candidates. Raises filters.InvalidFilter (a ValueError) for unusable values."""
+    filters = build_filters(location, role)
     base_position = None
     if position_id:
         base_position = db.query(Position).filter(Position.id == position_id).first()
@@ -172,12 +200,12 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
             raise RequirementNotFound("Requirement not found.")
     query_text = (query_text or "").strip()
     active_skills = [s.strip() for s in (filter_skills or []) if s.strip()]
-    if not base_position and not query_text and not active_skills:
-        raise ValueError("Enter a search query, add a skill filter, or select a requirement.")
+    if not base_position and not query_text and not active_skills and not filters.active:
+        raise ValueError("Enter a search query, add a skill filter, add a location or role filter, or select a requirement.")
 
     started = time.perf_counter()
     limit = max(1, min(top_n, settings.SEARCH_MAX_TOP_N))
-    cache_key = _search_cache_key(query_text, filter_skills, min_experience, position_id, limit)
+    cache_key = _search_cache_key(query_text, filter_skills, min_experience, position_id, limit, filters)
     cached = get_cache(cache_key)
     if cached is not None:
         logger.info("search cache_hit query=%r position=%s top_n=%s", query_text[:80], position_id or "-", limit)
@@ -186,13 +214,14 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     # Query-first: whatever the recruiter typed always drives retrieval and scoring. A JD,
     # when selected, is context (title + skills), not a replacement for the query.
     persist_matches = bool(base_position) and not query_text
-    target_position = base_position if persist_matches else _AdHocTarget(base_position, query_text or " ".join(active_skills))
+    ad_hoc_text = query_text or " ".join(active_skills) or " ".join(filter(None, [filters.role, filters.location]))
+    target_position = base_position if persist_matches else _AdHocTarget(base_position, ad_hoc_text)
     if query_text:
         retrieval_text = f"{base_position.title} {query_text}" if base_position else query_text
     elif base_position:
         retrieval_text = f"{base_position.title} {base_position.jd_text}"
     else:
-        retrieval_text = " ".join(active_skills)
+        retrieval_text = " ".join(active_skills) or ad_hoc_text
     lexical_query = retrieval_text
     vector = generate_embedding(retrieval_text)
     if base_position:
@@ -202,23 +231,40 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         jd_skills = active_skills
 
     candidate_limit = min(max(limit * settings.SEARCH_CANDIDATE_MULTIPLIER, 50), 500)
-    vector_rows = search_vectors(vector, candidate_limit) if vector else []
+    vector_rows = search_vectors(vector, candidate_limit, filters) if vector else []
     # Skill chips are enforced below with text-aware matching; a hard OpenSearch keyword filter on the
     # parsed skills list would drop candidates whose resume has the skill but whose parse missed it.
-    lexical_rows = search_lexical(lexical_query, candidate_limit, None, min_experience)
+    lexical_rows = search_lexical(lexical_query, candidate_limit, None, min_experience, filters)
     fused = _rrf([("vector", vector_rows), ("lexical", lexical_rows)], candidate_limit)
     _normalize_lexical_scores(fused)
 
     # If indexes are empty, use the relational pool rather than returning fake semantic scores.
     candidate_ids = list(fused.keys())
     if not candidate_ids:
-        q = db.query(Candidate)
+        q = apply_sql_prefilter(db.query(Candidate), Candidate, filters)
         if min_experience is not None: q = q.filter(Candidate.years_experience >= min_experience)
-        candidates = q.order_by(Candidate.uploaded_at.desc()).limit(candidate_limit).all()
+        # With a location/role filter the exact check below can drop SQL-prefilter hits, so read a
+        # wider window first instead of truncating before the filter.
+        candidates = q.order_by(Candidate.uploaded_at.desc()).limit(RELATIONAL_FILTER_WINDOW if filters.active else candidate_limit).all()
     else:
         candidates = db.query(Candidate).filter(Candidate.id.in_(candidate_ids)).all()
         by_id = {c.id: c for c in candidates}
         candidates = [by_id[cid] for cid in candidate_ids if cid in by_id]
+
+    # Location / role: the authoritative check, before any scoring. The index pre-filters only narrow
+    # recall; this enforces the exact rules against the stored metadata (and covers legacy index
+    # entries and the relational fallback). Missing metadata is excluded, never assumed to match.
+    excluded_missing = excluded_mismatch = 0
+    if filters.active:
+        eligible = []
+        for c in candidates:
+            if candidate_matches(c.location, c.job_titles, filters):
+                eligible.append(c)
+            elif (filters.location_key and not c.location) or (filters.role_tokens and not c.job_titles):
+                excluded_missing += 1
+            else:
+                excluded_mismatch += 1
+        candidates = eligible[:candidate_limit]
 
     # Hard skill filters are AND-like for explicit chips: every chip should be present.
     if active_skills:
@@ -336,12 +382,13 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         # Match rows were rewritten, so cached per-candidate match matrices are stale.
         clear_cache("candidate:matches:")
     response = {"total_matches": len(scored), "top_n": limit, "results": results,
+            "filters": _filter_report(db, filters, excluded_missing, excluded_mismatch),
             "scored_against_jd": ({"id": base_position.id, "title": base_position.title, "version": base_position.jd_version} if base_position else None),
             "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "laya_calls": laya_calls, "llm_calls": llm_calls}}
     set_cache(cache_key, response, settings.CACHE_TTL_QUERY)
     logger.info(
-        "search query=%r position=%s skills=%s min_exp=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s laya_calls=%s llm_calls=%s duration_ms=%s",
-        query_text[:80], position_id or "-", active_skills, min_experience, len(scored), len(results),
+        "search query=%r position=%s skills=%s min_exp=%s filters=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s laya_calls=%s llm_calls=%s duration_ms=%s",
+        query_text[:80], position_id or "-", active_skills, min_experience, filters.cache_part(), len(scored), len(results),
         bool(vector_rows), bool(lexical_rows), reranked_by_bge, laya_calls, llm_calls, round((time.perf_counter() - started) * 1000),
     )
     if not vector_rows:

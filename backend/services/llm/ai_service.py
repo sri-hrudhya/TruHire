@@ -5,8 +5,8 @@ from typing import Dict, List, Optional, Tuple
 from backend.config import settings
 from backend.services.common.ai_audit import ai_feature
 from backend.services.ingestion.pii import redact_pii
+from backend.services.llm.router import chat_completion
 from backend.services.llm.vllm import (
-    chat_completion,
     generate_embedding as vllm_embedding,
     generate_embeddings_batch as vllm_embeddings_batch,
 )
@@ -216,6 +216,37 @@ as they appear in the JD.
         return None
 
 
+def llm_extract_jd_filters(title: str, jd_text: str) -> Optional[Dict[str, str]]:
+    """Target location, role and work mode as stated in the JD. Every field is "" when the JD does
+    not say; the prompt forbids guessing, and values are re-validated before use. None on failure."""
+    safe_jd = redact_pii(jd_text)
+    prompt = f"""Read this job description and return JSON only with keys:
+location (the city/region/country where the job is based, exactly as written in the JD; "" if the JD names none - never infer one from the company name),
+role (the job title being hired for, as written in the JD, without company name or requisition codes; "" if unclear),
+work_mode ("remote", "hybrid" or "onsite" only if the JD explicitly says so, otherwise "").
+
+{untrusted("job_title", title[:200])}
+{untrusted("job_description", safe_jd[:6000])}"""
+    try:
+        with ai_feature("jd_filters"):
+            result = chat_completion([
+                _system("You are a precise requirements-extraction engine. Return valid JSON only. Use an empty string for anything the text does not state."),
+                {"role": "user", "content": prompt}
+            ], temperature=0.0, max_tokens=200, enable_thinking=False)
+        data = _json_from_response(result)
+        if not isinstance(data, dict):
+            return None
+        mode = str(data.get("work_mode") or "").strip().lower()
+        return {
+            "location": _clean_location(data.get("location")),
+            "role": (_clean_job_titles([data.get("role")]) or [""])[0],
+            "work_mode": mode if mode in ("remote", "hybrid", "onsite") else "",
+        }
+    except Exception as exc:
+        logger.warning(f"LLM JD filter extraction failed: {exc}")
+        return None
+
+
 # Parsed fields drive scoring, filters, chat context and emails, so LLM output is bounded
 # before it is stored. A field that fails validation is dropped and the heuristic parser's
 # value is used instead (see parsing.parse_resume).
@@ -247,6 +278,22 @@ def _clean_skills(values) -> List[str]:
     return skills
 
 
+def _clean_location(value) -> str:
+    """A place name the resume states, or "" - never a sentence, link or instruction."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text or len(text) > 100 or _SUSPICIOUS_FIELD.search(text) or text.lower() in _UNKNOWN_VALUES:
+        return ""
+    return text
+
+
+def _clean_job_titles(values) -> List[str]:
+    from backend.services.retrieval.filters import clean_titles
+    return [t for t in clean_titles(values) if not _SUSPICIOUS_FIELD.search(t) and t.lower() not in _UNKNOWN_VALUES]
+
+
+_UNKNOWN_VALUES = {"n/a", "na", "none", "null", "unknown", "not specified", "not stated", "not available", "not provided", "-"}
+
+
 def validate_resume_fields(data: Dict) -> Dict:
     name = str(data.get("candidate_name") or "").strip()
     if len(name) > MAX_NAME_CHARS or _SUSPICIOUS_FIELD.search(name) or _SUSPICIOUS_NAME.search(name):
@@ -265,6 +312,8 @@ def validate_resume_fields(data: Dict) -> Dict:
         "extracted_skills": _clean_skills(data.get("extracted_skills")),
         "years_experience": years,
         "education": education,
+        "location": _clean_location(data.get("location")),
+        "job_titles": _clean_job_titles(data.get("job_titles")),
     }
 
 
@@ -278,7 +327,12 @@ candidate_name (the person's actual full name, never a section header like "Summ
 extracted_skills (array of every technical skill, tool, framework, platform, or methodology
 mentioned anywhere in the text - do not limit yourself to any fixed list; one short string per skill),
 years_experience (total years of professional experience as a number),
-education (degree and institution, or "Not Specified" if none is stated).
+education (degree and institution, or "Not Specified" if none is stated),
+location (the candidate's own current city/region/country exactly as the resume states it, e.g. in
+the header or contact block; "" if the resume does not state one - never infer it from a university,
+employer or phone number),
+job_titles (array of job titles the candidate has held, most recent / current first, each exactly as
+written in the resume, e.g. "Senior Backend Engineer"; [] if none are stated - never invent titles).
 
 {untrusted("resume_filename", filename[:200])}
 {untrusted("resume_text", window)}"""
@@ -316,6 +370,9 @@ def llm_parse_resume(raw_text: str, filename: str) -> Optional[Dict]:
         "extracted_skills": skills,
         "years_experience": head["years_experience"] or max((r["years_experience"] for r in ok), default=0.0),
         "education": head["education"] if head["education"] != "Not Specified" else next((r["education"] for r in ok if r["education"] != "Not Specified"), "Not Specified"),
+        "location": head["location"] or next((r["location"] for r in ok if r["location"]), ""),
+        # Windows are consecutive slices of the same resume, so concatenating keeps recency order.
+        "job_titles": _clean_job_titles([t for r in ok for t in r["job_titles"]]),
     }
 
 
@@ -356,8 +413,10 @@ def generate_candidate_email(
     recruiter_name: Optional[str],
     company_name: Optional[str],
     company_description: Optional[str],
+    outcome: str = "shortlisted",
 ) -> Dict[str, str]:
-    """Draft a personalized outreach email for one shortlisted candidate.
+    """Draft a personalized email for one candidate: an invitation when shortlisted, a polite
+    regret message when not shortlisted.
 
     Every fact must come from the supplied JD, company settings and the candidate's own
     profile/resume. Raises EmailGenerationError on any failure; there is no fallback text.
@@ -384,7 +443,17 @@ Education: {education or 'not listed'}
 Resume excerpt:
 {safe_resume or 'not available'}""")
 
-    prompt = f"""Write a personalized recruiting email inviting this shortlisted candidate to discuss the role below.
+    if outcome == "not_shortlisted":
+        task = "Write a personalized, respectful email telling this candidate we will not be moving forward with their application for the role below."
+        outcome_rules = """- This is a rejection: be kind and clear, thank them for their time and interest, and do not invite them to interview or imply a next step.
+- Do not give a detailed critique or the reasons for the decision; one brief, general line is enough. Optionally wish them well and say they are welcome to apply for future openings only if that is natural.
+- Body: plain text, 80-150 words, greeting with the candidate's first name."""
+    else:
+        task = "Write a personalized recruiting email inviting this shortlisted candidate to discuss the role below."
+        outcome_rules = """- Reference two or three specific, relevant points from this candidate's own profile that connect to the role.
+- Body: plain text, 120-220 words, greeting with the candidate's first name, a clear call to reply to arrange a conversation."""
+
+    prompt = f"""{task}
 
 {role_block}
 
@@ -399,11 +468,10 @@ RECRUITER NAME (sign-off): {recruiter_name or 'not provided - sign off without a
 Rules:
 - Use only facts stated above. Never invent qualifications, employers, projects, salary, location, benefits, dates or interview logistics.
 - Do not include any link, email address or phone number unless it appears in the COMPANY section.
-- Reference two or three specific, relevant points from this candidate's own profile that connect to the role.
+{outcome_rules}
 - Do not mention match scores, rankings, internal IDs or that an AI wrote the email.
 - No placeholders such as [Company Name] or {{{{name}}}}; if a detail is unknown, leave it out.
 - Subject: specific to this role and candidate, under 90 characters.
-- Body: plain text, 120-220 words, greeting with the candidate's first name, a clear call to reply to arrange a conversation.
 
 Return JSON only: {{"subject": "...", "body": "..."}}"""
 

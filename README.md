@@ -116,6 +116,32 @@ POST /api/ingest/reindex                     # everything
 POST /api/ingest/reindex?missing_only=true   # only resumes missing from the indexes
 ```
 
+#### Location & role filters — migration and reindexing
+
+The search page can filter on candidate **location** and **current/previous job titles**
+(pre-filled from the selected requirement, always editable).
+
+- **Schema:** nothing to run. On startup `ensure_schema()` adds the new columns
+  (`candidates.location / location_norm / job_titles / title_norms`,
+  `positions.search_filters`, `search_states.location / role`) with
+  `ADD COLUMN IF NOT EXISTS`. OpenSearch gets the new field mappings and Qdrant the
+  `location_keys` / `role_tokens` payload indexes automatically (first index write / first
+  filtered search).
+- **Existing candidates have no location or titles yet**, so an active filter excludes them
+  (missing data is never treated as a match). Backfill by re-reading the stored resumes
+  (runs one LLM parse per resume, in the background) — this also re-indexes them:
+
+  ```
+  POST /api/ingest/reparse
+  ```
+
+  `POST /api/ingest/reindex` alone is **not** enough: it re-indexes what is already stored
+  and cannot add metadata that was never extracted. New uploads are extracted automatically.
+- The search response's `filters` block reports how many candidates were excluded for missing
+  vs. non-matching metadata, and how many candidates in total still lack a location / titles.
+- Remote/hybrid: the JD's stated work mode is shown next to the Location field for context
+  only. Resumes do not reliably state a work-mode preference, so it is not used to filter.
+
 Uploaded resumes and requirement files are never served statically; they are
 streamed to logged-in users via `GET /api/candidates/{id}/resume` and
 `GET /api/job-descriptions/{id}/file`.
@@ -164,8 +190,8 @@ backend/
     common/           # Cache, AI audit trail, email delivery, export, retention, observability
   evaluation/         # Retrieval evaluation metrics
   scripts/            # Maintenance CLIs (eval, SQLite->Postgres migration, injection scan)
-src/                  # React application (pages, components, context, API client)
-tests/                # pytest suite + frontend unit test
+frontend/             # React app (src/, index.html, vite.config.js, package.json)
+tests/                # pytest suite (frontend test is in frontend/tests)
 eval/                 # Example retrieval-evaluation dataset
 docker-compose.yml    # Local OpenSearch + Dashboards
 ```
@@ -175,7 +201,7 @@ docker-compose.yml    # Local OpenSearch + Dashboards
 ```bash
 uv sync --group dev
 uv run pytest           # backend tests
-npm test                # frontend request-cache test
+(cd frontend && npm test)   # frontend request-cache test
 ```
 
 The backend tests use a separate `<db>_test` PostgreSQL database (created

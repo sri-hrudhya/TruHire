@@ -18,6 +18,7 @@ from backend.services.ingestion.injection_screen import screen_resume
 from backend.services.ingestion.pii import detect_pii, redact_pii
 from backend.services.ingestion.chunking import profile_chunks, candidate_header
 from backend.services.llm.ai_service import generate_embedding, generate_embeddings_batch
+from backend.services.retrieval.filters import index_payload_fields, set_candidate_filter_metadata
 from backend.services.retrieval.opensearch import index_candidate, index_candidates_batch
 from backend.services.retrieval.qdrant import upsert_candidates_batch, recreate_collection, collection_layout
 
@@ -30,7 +31,9 @@ _profile_header = candidate_header
 
 
 def _payload(candidate: Candidate) -> Dict:
-    return {"candidate_id": candidate.id, "candidate_name": candidate.candidate_name, "skills": candidate.extracted_skills or [], "years_experience": candidate.years_experience, "filename": candidate.original_filename}
+    # location_keys / role_tokens are the filterable fields shared by Qdrant and OpenSearch.
+    return {"candidate_id": candidate.id, "candidate_name": candidate.candidate_name, "skills": candidate.extracted_skills or [], "years_experience": candidate.years_experience, "filename": candidate.original_filename,
+            **index_payload_fields(candidate.location, candidate.job_titles)}
 
 
 def index_candidate_documents(candidate: Candidate, raw_text: str) -> None:
@@ -125,6 +128,7 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
                         pii_detected = {category: len(matches) for category, matches in pii_found.items()}
                         display_id = get_next_candidate_display_id(db)
                         candidate = Candidate(display_id=display_id, position_id=None, resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, status="New", uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, file_hash=file_hash, original_filename=filename)
+                        set_candidate_filter_metadata(candidate, parsed.get("location"), parsed.get("job_titles"))
                         db.add(candidate); db.flush()
                         safe = redact_pii(raw_text, candidate_name=candidate.candidate_name)
                         prepared.append((candidate, _profile_header(candidate), safe))
@@ -346,6 +350,8 @@ def reparse_candidate(session: Session, candidate: Candidate) -> Dict:
     candidate.education = parsed["education"]
     candidate.email = parsed["email"] or candidate.email
     candidate.phone = parsed["phone"] or candidate.phone
+    # Unlike contact fields, an absent location/title replaces the old value: it reflects the resume as parsed now.
+    set_candidate_filter_metadata(candidate, parsed.get("location"), parsed.get("job_titles"))
     session.flush()
     index_candidate_documents(candidate, candidate.resume_text)
     return {"id": candidate.id, "name": candidate.candidate_name, "skills_before": before, "skills_after": len(parsed["extracted_skills"])}

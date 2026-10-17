@@ -1,22 +1,40 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, ArrowLeft, Eye, History, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { emailApi, jdApi } from '../lib/api';
-import EmailComposer, { EmailStatusBadge, RecipientSelector, formatDateTime } from '../components/EmailComposer';
+import EmailComposer, { EMAILABLE_STATUSES, EmailStatusBadge, RecipientSelector, formatDateTime } from '../components/EmailComposer';
 
 const errorText = (err, fallback) => err?.response?.data?.detail || err?.message || fallback;
 
+// Remember the chosen requirement and recipients for the browser session so leaving the page and coming
+// back (or a refresh) does not wipe them. Storage can be unavailable, so every access is guarded.
+const DRAFT_KEY = 'truhire_email_draft';
+const loadDraft = () => {
+  try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY)) || {}; } catch { return {}; }
+};
+const saveDraft = (draft) => {
+  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* ignore */ }
+};
+
 function SendEmailsSection({ onSent }) {
   const [jds, setJds] = useState([]);
-  const [jdId, setJdId] = useState('');
+  const [jdId, setJdId] = useState(() => loadDraft().jdId || '');
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [selectedIds, setSelectedIds] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(() => loadDraft().selectedIds || []);
   const [composing, setComposing] = useState(false);
 
   useEffect(() => {
-    jdApi.list().then((r) => setJds(r.data)).catch((err) => setError(errorText(err, 'Failed to load requirements.')));
+    jdApi.list().then((r) => {
+      setJds(r.data);
+      if (jdId) {
+        if (r.data.some((j) => j.id === jdId)) loadCandidates(jdId);
+        else { setJdId(''); setSelectedIds([]); }
+      }
+    }).catch((err) => setError(errorText(err, 'Failed to load requirements.')));
   }, []);
+
+  useEffect(() => { saveDraft({ jdId, selectedIds }); }, [jdId, selectedIds]);
 
   const loadCandidates = async (id) => {
     setLoading(true);
@@ -45,6 +63,19 @@ function SendEmailsSection({ onSent }) {
     if (id) loadCandidates(id);
   };
 
+  const changeStatus = async (candidateId, status) => {
+    const previous = candidates;
+    setError(null);
+    setCandidates((cs) => cs.map((c) => (c.id === candidateId ? { ...c, requirement_status: status } : c)));
+    if (!EMAILABLE_STATUSES.includes(status)) setSelectedIds((ids) => ids.filter((x) => x !== candidateId));
+    try {
+      await jdApi.setCandidateStatus(jdId, candidateId, status);
+    } catch (err) {
+      setCandidates(previous);
+      setError(errorText(err, 'Could not update the candidate status.'));
+    }
+  };
+
   const position = jds.find((j) => j.id === jdId);
 
   return (
@@ -53,7 +84,7 @@ function SendEmailsSection({ onSent }) {
         <Mail size={18} color="var(--primary)" /> Send Emails
       </h2>
       <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', margin: '0.25rem 0 1rem' }}>
-        Choose a requirement, select candidates marked Shortlisted for it, and review AI-personalized drafts before sending.
+        Choose a requirement, mark candidates Shortlisted or Not Shortlisted, select them, and review AI-personalized drafts before sending.
       </p>
 
       <label className="input-label" htmlFor="email-jd">Requirement</label>
@@ -90,10 +121,10 @@ function SendEmailsSection({ onSent }) {
             <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>No candidates meet the match threshold for this requirement.</div>
           ) : (
             <>
-              <RecipientSelector candidates={candidates} selectedIds={selectedIds} onChange={setSelectedIds} />
-              {!candidates.some((c) => c.requirement_status === 'Shortlisted') && (
+              <RecipientSelector candidates={candidates} selectedIds={selectedIds} onChange={setSelectedIds} onStatusChange={changeStatus} />
+              {!candidates.some((c) => EMAILABLE_STATUSES.includes(c.requirement_status)) && (
                 <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-                  No candidates are Shortlisted for this requirement yet. Update statuses on the Requirements page.
+                  Set a candidate's status to Shortlisted (invitation email) or Not Shortlisted (polite regret email) in the Status column to select them.
                 </p>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
@@ -254,7 +285,7 @@ function EmailHistorySection({ refreshToken }) {
         <div className="table-container">
           <table className="data-table">
             <thead>
-              <tr><th>Candidate</th><th>Recipient</th><th>Subject</th><th>Date / time</th><th>Status</th><th></th></tr>
+              <tr><th>Candidate</th><th>Recipient</th><th>Match</th><th>Subject</th><th>Date / time</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {records.map((rec) => (
@@ -264,6 +295,7 @@ function EmailHistorySection({ refreshToken }) {
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>{rec.candidate_display_id || '—'}</div>
                   </td>
                   <td style={{ fontSize: '0.8125rem' }}>{rec.recipient_email}</td>
+                  <td style={{ fontSize: '0.8125rem', fontWeight: 700 }}>{typeof rec.match_score === 'number' ? `${rec.match_score.toFixed(1)}%` : '—'}</td>
                   <td style={{ fontSize: '0.8125rem', maxWidth: '280px' }}>{rec.subject}</td>
                   <td style={{ fontSize: '0.8125rem', whiteSpace: 'nowrap' }}>{formatDateTime(rec.created_at)}</td>
                   <td><EmailStatusBadge status={rec.status} /></td>

@@ -7,6 +7,8 @@ import {
   Sparkles,
   Filter,
   Briefcase,
+  MapPin,
+  UserSquare,
   ChevronDown,
   ChevronUp,
   Quote,
@@ -24,6 +26,10 @@ export default function SearchPage() {
   const [filterChips, setFilterChips] = useState([]);
   const [minExp, setMinExp] = useState('');
   const [selectedJdId, setSelectedJdId] = useState('');
+  // Hard filters. Pre-filled from the selected requirement (when it states them); always editable.
+  const [locationFilter, setLocationFilter] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [jdFilterInfo, setJdFilterInfo] = useState(null);
   const [topN, setTopN] = useState(20);
   const [previewCandidate, setPreviewCandidate] = useState(null);
   const [isResumeOpen, setIsResumeOpen] = useState(false);
@@ -51,6 +57,8 @@ export default function SearchPage() {
           setFilterChips(state.filter_skills || []);
           setMinExp(state.min_experience ?? '');
           setSelectedJdId(state.position_id || '');
+          setLocationFilter(state.location || '');
+          setRoleFilter(state.role || '');
           setTopN(state.top_n || 20);
           setSearchResults({
             total_matches: state.total_matches || 0,
@@ -60,6 +68,8 @@ export default function SearchPage() {
             scored_against_jd: state.position_id ? { id: state.position_id, title: (jdRes.data.find(j => j.id === state.position_id)?.title || 'Selected Requirement'), version: (jdRes.data.find(j => j.id === state.position_id)?.jd_version || '') } : null,
             active_filter_chips: state.filter_skills || [],
             min_experience: state.min_experience ?? null,
+            location: state.location || null,
+            role: state.role || null,
             query: state.query || ''
           });
         }
@@ -73,13 +83,15 @@ export default function SearchPage() {
     restoreSearch();
   }, []);
 
-  const handleSearch = async (overrideChips = null, overrideJd = null) => {
+  const handleSearch = async (overrideChips = null, overrideJd = null, overrideFilters = null) => {
     setLoading(true);
     setModifierNotice(null);
 
     const activeSkills = overrideChips !== null ? overrideChips : filterChips;
     const activeJd = overrideJd !== null ? overrideJd : selectedJdId;
-    if (!activeJd && !query.trim() && activeSkills.length === 0) {
+    const activeLocation = (overrideFilters ? overrideFilters.location : locationFilter).trim();
+    const activeRole = (overrideFilters ? overrideFilters.role : roleFilter).trim();
+    if (!activeJd && !query.trim() && activeSkills.length === 0 && !activeLocation && !activeRole) {
       setSearchResults(null);
       setLoading(false);
       return;
@@ -91,6 +103,8 @@ export default function SearchPage() {
         filter_skills: activeSkills,
         min_experience: minExp ? parseFloat(minExp) : null,
         position_id: activeJd || null,
+        location: activeLocation || null,
+        role: activeRole || null,
         top_n: parseInt(topN, 10)
       });
 
@@ -107,6 +121,8 @@ export default function SearchPage() {
       }
     } catch (err) {
       console.error('Search error:', err);
+      const detail = err?.response?.data?.detail;
+      if (typeof detail === 'string') setModifierNotice(detail);
     } finally {
       setLoading(false);
     }
@@ -118,8 +134,38 @@ export default function SearchPage() {
     handleSearch(updated);
   };
 
+  // Selecting a requirement pre-fills location / role from the JD. Nothing is invented: a field the JD
+  // does not state is left empty. The recruiter edits or clears the values, then presses Search.
+  const handleSelectJd = async (jdId) => {
+    setSelectedJdId(jdId);
+    setJdFilterInfo(null);
+    if (!jdId) {
+      setLocationFilter('');
+      setRoleFilter('');
+      handleSearch(null, '', { location: '', role: '' });
+      return;
+    }
+    let derived = { location: null, role: null };
+    try {
+      const res = await jdApi.getSearchFilters(jdId);
+      derived = res.data || derived;
+      setJdFilterInfo(res.data || null);
+    } catch (err) {
+      console.error('Failed to read location/role from the requirement:', err);
+    }
+    setLocationFilter(derived.location || '');
+    setRoleFilter(derived.role || '');
+    if (!derived.location && !derived.role) {
+      // Nothing to review: keep the previous one-click behaviour.
+      handleSearch(null, jdId, { location: '', role: '' });
+    }
+  };
+
   const handleClearAll = async () => {
     setQuery('');
+    setLocationFilter('');
+    setRoleFilter('');
+    setJdFilterInfo(null);
     setFilterChips([]);
     setMinExp('');
     setSelectedJdId('');
@@ -220,10 +266,10 @@ export default function SearchPage() {
           </div>
           <button
             type="submit"
-            disabled={loading || (!query.trim() && !selectedJdId && filterChips.length === 0)}
+            disabled={loading || (!query.trim() && !selectedJdId && filterChips.length === 0 && !locationFilter.trim() && !roleFilter.trim())}
             className="btn btn-primary"
             style={{ padding: '0 1.5rem', minWidth: '120px' }}
-            title={(query.trim() || selectedJdId || filterChips.length) ? undefined : 'Type a query or select a requirement'}
+            title={(query.trim() || selectedJdId || filterChips.length || locationFilter.trim() || roleFilter.trim()) ? undefined : 'Type a query or select a requirement'}
           >
             {loading ? 'Searching...' : 'Search'}
           </button>
@@ -245,10 +291,7 @@ export default function SearchPage() {
             </label>
             <select
               value={selectedJdId}
-              onChange={(e) => {
-                setSelectedJdId(e.target.value);
-                handleSearch(null, e.target.value);
-              }}
+              onChange={(e) => handleSelectJd(e.target.value)}
               className="input-field"
               style={{ fontSize: '0.8125rem', padding: '0.5rem 0.75rem' }}
             >
@@ -306,6 +349,74 @@ export default function SearchPage() {
           </div>
         </div>
 
+        {/* Role & Location filters: pre-filled from the requirement, editable, sent with the search */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr auto',
+          gap: '1rem',
+          alignItems: 'end',
+          marginTop: '1rem'
+        }}>
+          <div>
+            <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <UserSquare size={13} /> Role / Job Title
+              {jdFilterInfo?.role && roleFilter === jdFilterInfo.role && (
+                <span className="badge badge-neutral" style={{ fontSize: '0.65rem' }}>
+                  {jdFilterInfo.sources?.role === 'title' ? 'from requirement title' : 'from requirement'}
+                </span>
+              )}
+            </label>
+            <input
+              type="text"
+              value={roleFilter}
+              maxLength={100}
+              onChange={(e) => setRoleFilter(e.target.value)}
+              placeholder="e.g. Backend Engineer (current or previous title)"
+              className="input-field"
+              style={{ fontSize: '0.8125rem', padding: '0.5rem 0.75rem' }}
+            />
+          </div>
+          <div>
+            <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <MapPin size={13} /> Location
+              {jdFilterInfo?.location && locationFilter === jdFilterInfo.location && (
+                <span className="badge badge-neutral" style={{ fontSize: '0.65rem' }}>from requirement</span>
+              )}
+              {jdFilterInfo?.work_mode && (
+                <span className="badge badge-neutral" style={{ fontSize: '0.65rem', textTransform: 'capitalize' }}>{jdFilterInfo.work_mode}</span>
+              )}
+            </label>
+            <input
+              type="text"
+              value={locationFilter}
+              maxLength={100}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              placeholder="e.g. Bengaluru (candidates with no stated location are excluded)"
+              className="input-field"
+              style={{ fontSize: '0.8125rem', padding: '0.5rem 0.75rem' }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => { setRoleFilter(''); setLocationFilter(''); handleSearch(null, null, { location: '', role: '' }); }}
+            disabled={!roleFilter && !locationFilter}
+            className="btn btn-secondary"
+            style={{ fontSize: '0.8125rem', padding: '0.5rem 0.875rem' }}
+          >
+            Clear role &amp; location
+          </button>
+        </div>
+        {jdFilterInfo && !jdFilterInfo.location && !jdFilterInfo.role && (
+          <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-subtle)', fontStyle: 'italic' }}>
+            This requirement does not state a location or role, so no filters were pre-filled.
+          </div>
+        )}
+        {(locationFilter || roleFilter) && jdFilterInfo && (
+          <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
+            Filters were filled from the requirement. Edit or clear them, then press Search.
+          </div>
+        )}
+
         {/* Active Filter Chips & Modifier Feedback */}
         <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -343,6 +454,9 @@ export default function SearchPage() {
               Found <strong style={{ color: 'var(--primary)' }}>{searchResults.total_matches.toLocaleString()}</strong> matches
               {searchResults.total_matches > searchResults.top_n && (
                 <span> (displaying top {searchResults.top_n})</span>
+              )}
+              {searchResults.filters && (
+                <span> • Filtered{searchResults.filters.role ? <> by role <strong>{searchResults.filters.role}</strong></> : null}{searchResults.filters.location ? <> in <strong>{searchResults.filters.location}</strong></> : null}</span>
               )}
               {searchResults.scored_against_jd && (
                 <span> • Scored against <strong>{searchResults.scored_against_jd.title}</strong> (v{searchResults.scored_against_jd.version})</span>
@@ -444,6 +558,12 @@ export default function SearchPage() {
                         <span>{cand.years_experience} yrs experience</span>
                         <span>•</span>
                         <span>{cand.education || 'Education not specified'}</span>
+                        {(cand.job_titles?.[0] || cand.location) && (
+                          <>
+                            <span>•</span>
+                            <span>{[cand.job_titles?.[0], cand.location].filter(Boolean).join(' · ')}</span>
+                          </>
+                        )}
                         <span>•</span>
                         <span>Added {new Date(cand.uploaded_at).toLocaleDateString()}</span>
                       </div>
@@ -612,6 +732,14 @@ export default function SearchPage() {
       ) : (
         <div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
           No candidates found matching your active filters. Try removing keywords or reducing minimum experience.
+          {searchResults?.filters && (
+            <div style={{ marginTop: '0.5rem', fontSize: '0.8125rem' }}>
+              {searchResults.filters.excluded_missing_metadata > 0 && (
+                <div>{searchResults.filters.excluded_missing_metadata} candidate(s) were excluded because their resume does not state the {[searchResults.filters.location && 'location', searchResults.filters.role && 'job title'].filter(Boolean).join(' / ')} being filtered on.</div>
+              )}
+              <div>Try clearing or broadening the role / location filter.</div>
+            </div>
+          )}
         </div>
       )}
 

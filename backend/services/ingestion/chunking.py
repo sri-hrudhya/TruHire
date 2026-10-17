@@ -41,7 +41,13 @@ def profile_chunks(header: str, resume_text: str) -> List[str]:
 
 
 def candidate_header(candidate) -> str:
-    return (
+    header = (
         f"Name: {candidate.candidate_name}\nSkills: {', '.join(candidate.extracted_skills or [])}\n"
         f"Experience: {candidate.years_experience}\nEducation: {candidate.education or ''}"
     )
+    # Only stated facts are added, so unknown location/titles stay out of the embedding text.
+    if getattr(candidate, "job_titles", None):
+        header += f"\nTitles: {', '.join(candidate.job_titles)}"
+    if getattr(candidate, "location", None):
+        header += f"\nLocation: {candidate.location}"
+    return header

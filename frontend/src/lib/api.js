@@ -58,9 +58,12 @@ export const jdApi = {
   create: (data) => api.post('/job-descriptions', data),
   update: (id, data) => api.put(`/job-descriptions/${id}`, data),
   delete: (id) => api.delete(`/job-descriptions/${id}`),
-  getMatches: (id, top_n = 50) => api.get(`/job-descriptions/${id}/matches?top_n=${top_n}`),
+  // Scoring a requirement can take a while on a cold start (model loading), so allow more than the default.
+  getMatches: (id, top_n = 50) => api.get(`/job-descriptions/${id}/matches?top_n=${top_n}`, { timeout: 180000 }),
   setCandidateStatus: (id, candidateId, status) => api.put(`/job-descriptions/${id}/candidates/${candidateId}/status`, { status }),
   summarize: (id) => api.post(`/job-descriptions/${id}/summarize`),
+  // Location / role / work mode read from the JD (null where the JD does not state them).
+  getSearchFilters: (id) => api.get(`/job-descriptions/${id}/search-filters`, { timeout: 60000 }),
   getFile: (id) => api.get(`/job-descriptions/${id}/file`, { responseType: 'blob' }),
   extractText: (formData) => api.post('/job-descriptions/extract-text', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }

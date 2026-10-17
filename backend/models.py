@@ -32,6 +32,8 @@ class Position(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     file_url = Column(String, nullable=True)
     original_filename = Column(String, nullable=True)
+    # Location / role / work mode read from the JD, cached per jd_version so the LLM runs once per edit.
+    search_filters = Column(JSON, nullable=True)
     creator = relationship("User", back_populates="positions")
     matches = relationship("CandidateMatch", back_populates="position", cascade="all, delete-orphan")
 
@@ -67,6 +69,11 @@ class Candidate(Base):
     extracted_skills = Column(JSON, default=list)
     years_experience = Column(Float, default=0.0)
     education = Column(Text, nullable=True)
+    # Extracted only when the resume states them; NULL/[] means unknown, never a guess.
+    location = Column(String, nullable=True)
+    location_norm = Column(String, nullable=True)   # '|bengaluru|karnataka|india|' (see retrieval/filters.py)
+    job_titles = Column(JSON, default=list)         # most recent first
+    title_norms = Column(String, nullable=True)
     resume_text = Column(Text, nullable=True)
     pii_detected = Column(JSON, default=dict)
     status = Column(String, default="New", index=True)
@@ -107,6 +114,8 @@ class SearchState(Base):
     query = Column(Text, default="", nullable=False)
     filter_skills = Column(JSON, default=list)
     min_experience = Column(Float, nullable=True)
+    location = Column(String, nullable=True)
+    role = Column(String, nullable=True)
     position_id = Column(String, ForeignKey("positions.id", ondelete="SET NULL"), nullable=True, index=True)
     top_n = Column(Integer, default=20, nullable=False)
     results = Column(JSON, default=list)

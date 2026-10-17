@@ -15,10 +15,11 @@ from backend.models import (
 )
 from backend.auth import get_current_user
 from backend.config import settings
-from backend.services.common.cache import get_cache, set_cache, delete_cache, clear_cache
+from backend.services.common.cache import get_cache, set_cache, delete_cache, clear_cache, get_index_epoch
 from backend.services.ingestion.parsing import extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import resolve_stored_file, save_upload_file
 from backend.services.llm.ai_service import summarize_jd
+from backend.services.retrieval.filters import extract_jd_filters
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +233,22 @@ def _unindexed_candidate_count(db: Session) -> int:
     return db.query(Candidate.id).filter(Candidate.qdrant_point_id.is_(None)).count()
 
 
+def get_jd_search_filters(jd_id: str, db: Session) -> dict:
+    """Location / role / work mode read from the JD, for pre-filling the search filters. Extracted
+    once per (jd_version, title) and stored on the position, so re-selecting a JD costs nothing."""
+    pos = get_jd(jd_id, db)
+    stored = pos.search_filters or {}
+    if stored.get("jd_version") != pos.jd_version or stored.get("title") != pos.title:
+        stored = {**extract_jd_filters(pos.title, pos.jd_text), "jd_version": pos.jd_version, "title": pos.title}
+        pos.search_filters = stored
+        db.commit()
+    return {"position_id": pos.id, "jd_version": pos.jd_version, "location": stored.get("location"), "role": stored.get("role"),
+            "work_mode": stored.get("work_mode"), "sources": stored.get("sources") or {}}
+
+
 def get_jd_matches(id: str, top_n: int, db: Session) -> dict:
     pos = get_jd(id, db)
-    cache_key = f"requirements:matches:{id}:{top_n}"
+    cache_key = f"requirements:matches:{id}:v{pos.jd_version}:{get_index_epoch()}:{top_n}"
     cached = get_cache(cache_key)
     if cached is not None:
         return _with_requirement_state(db, id, cached)
@@ -300,7 +314,10 @@ def get_jd_matches(id: str, top_n: int, db: Session) -> dict:
         "retrieval": retrieval,
         "unindexed_candidates": _unindexed_candidate_count(db),
     }
-    set_cache(cache_key, res, ttl_seconds=settings.CACHE_TTL_QUERY)
+    # Only cache long when every retrieval source answered; a degraded run (e.g. OpenSearch down) must not
+    # pin lower scores for a day once the service recovers.
+    healthy = bool(retrieval and retrieval.get("vector") and retrieval.get("lexical"))
+    set_cache(cache_key, res, ttl_seconds=settings.CACHE_TTL_MATCHES if healthy else settings.CACHE_TTL_QUERY)
     return _with_requirement_state(db, id, res)
 
 
@@ -401,6 +418,11 @@ async def extract_job_description_text(
 @router.get("/api/job-descriptions/{id}", response_model=PositionResponse)
 def get_job_description(id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     return get_jd(id, db)
+
+
+@router.get("/api/job-descriptions/{id}/search-filters")
+def get_job_description_search_filters(id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return get_jd_search_filters(id, db)
 
 
 @router.get("/api/job-descriptions/{id}/file")

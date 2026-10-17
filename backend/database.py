@@ -22,6 +22,17 @@ def ensure_schema():
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE ingestion_batches ADD COLUMN IF NOT EXISTS stage VARCHAR"))
         conn.execute(text("ALTER TABLE ingestion_batches ADD COLUMN IF NOT EXISTS file_status JSON"))
+        # Location / role filters (candidate metadata, JD-derived defaults, saved search state).
+        for stmt in (
+            "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS location VARCHAR",
+            "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS location_norm VARCHAR",
+            "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS job_titles JSON",
+            "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS title_norms VARCHAR",
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS search_filters JSON",
+            "ALTER TABLE search_states ADD COLUMN IF NOT EXISTS location VARCHAR",
+            "ALTER TABLE search_states ADD COLUMN IF NOT EXISTS role VARCHAR",
+        ):
+            conn.execute(text(stmt))
     from backend.models import Candidate, Position, CANDIDATE_ID_PREFIX, POSITION_ID_PREFIX, seed_id_sequence
     db = SessionLocal()
     try:
