@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.services.common.cache import clear_cache
-from backend.models import AIAuditEvent, Candidate, CandidateMatch, Conversation, IngestionBatch, Position, RequirementCandidateStatus, SearchState
+from backend.models import AIAuditEvent, Candidate, CandidateAssignment, CandidateComment, CandidateMatch, Conversation, IngestionBatch, Position, RequirementCandidateStatus, SearchState
 from backend.services.ingestion.storage import delete_file_by_url_or_path
 from backend.services.retrieval.opensearch import delete_candidates_batch as delete_opensearch_batch
 from backend.services.retrieval.qdrant import delete_candidates_batch as delete_qdrant_batch
@@ -74,6 +74,8 @@ def cleanup_expired_resumes(db: Session, retention_days: Optional[int] = None) -
         # Cascade deletes CandidateMatch
         db.query(CandidateMatch).filter(CandidateMatch.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
         db.query(RequirementCandidateStatus).filter(RequirementCandidateStatus.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+        db.query(CandidateAssignment).filter(CandidateAssignment.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+        db.query(CandidateComment).filter(CandidateComment.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
 
         # Remove conversations referencing candidate
         db.query(Conversation).filter(Conversation.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
@@ -125,9 +127,14 @@ def cleanup_expired_jds(db: Session, retention_days: Optional[int] = None) -> Di
                 deleted_files += 1
 
     if position_ids:
+        from backend.services.common.requirement_history import record as record_history
+        for p in expired_positions:
+            record_history(db, "deleted", p, None, {"reason": f"Retention policy ({days} days)"}, user_name="System (retention)")
         # Delete related candidate matches
         db.query(CandidateMatch).filter(CandidateMatch.position_id.in_(position_ids)).delete(synchronize_session=False)
         db.query(RequirementCandidateStatus).filter(RequirementCandidateStatus.position_id.in_(position_ids)).delete(synchronize_session=False)
+        db.query(CandidateAssignment).filter(CandidateAssignment.position_id.in_(position_ids)).delete(synchronize_session=False)
+        db.query(CandidateComment).filter(CandidateComment.position_id.in_(position_ids)).delete(synchronize_session=False)
 
         # Clear position_id from search states
         db.query(SearchState).filter(SearchState.position_id.in_(position_ids)).update(

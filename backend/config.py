@@ -45,6 +45,26 @@ class Settings(BaseSettings):
     VLLM_EMBEDDING_BASE_URL: Optional[str] = None
     VLLM_EMBEDDING_API_KEY: Optional[str] = None
 
+    # ── Cloud LLM fallback providers (chat only; embeddings use local fastembed) ──
+    # Used by backend/services/llm/router.py when vLLM (DGX) is unreachable.
+    # Priority: vLLM → OpenRouter → Groq → Gemini.
+
+    # OpenRouter — 1st fallback. Routes to any model via a single API key.
+    OPENROUTER_API_KEY_1: Optional[str] = None
+    OPENROUTER_API_KEY_2: Optional[str] = None
+    OPENROUTER_CHAT_MODEL: str = "openai/gpt-4o-mini"  # override via .env
+
+    # Groq — 2nd fallback. Ultra-fast inference for Llama / Mixtral models.
+    GROQ_API_KEY_1: Optional[str] = None
+    GROQ_API_KEY_2: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
+
+    # Gemini — 3rd fallback. Three keys for high rate-limit headroom.
+    GEMINI_API_KEY_1: Optional[str] = None
+    GEMINI_API_KEY_2: Optional[str] = None
+    GEMINI_API_KEY_3: Optional[str] = None
+    GEMINI_CHAT_MODEL: str = "gemini-2.0-flash-lite"  # override via .env
+
     # Vector database. Required, no default - same reasoning as VLLM_BASE_URL above.
     QDRANT_URL: str
     QDRANT_API_KEY: Optional[str] = None
@@ -120,6 +140,22 @@ class Settings(BaseSettings):
         return self.JD_RETENTION_DAYS if self.JD_RETENTION_DAYS is not None else self.DATA_RETENTION_DAYS
 
     SEARCH_MAX_TOP_N: int = 100
+    SEARCH_DEFAULT_TOP_N: int = 20
+
+    # Reviewer collaboration + client-facing limits (served to the UI via /api/meta).
+    BOOTSTRAP_ADMIN_EMAILS: str = ""  # comma-separated; these emails register as admin, everyone else as recruiter
+    COMMENT_MAX_CHARS: int = 2000
+    HISTORY_PAGE_SIZE: int = 25
+    AUDIT_PAGE_SIZE: int = 25
+    JD_ACCEPTED_EXTENSIONS: str = ".pdf,.docx,.doc,.rtf,.odt,.txt,.md"
+
+    @property
+    def bootstrap_admin_emails(self) -> set:
+        return {e.strip().lower() for e in self.BOOTSTRAP_ADMIN_EMAILS.split(",") if e.strip()}
+
+    @property
+    def jd_accepted_extensions(self) -> list:
+        return [e.strip() for e in self.JD_ACCEPTED_EXTENSIONS.split(",") if e.strip()]
     HYBRID_VECTOR_WEIGHT: float = 0.60
     HYBRID_LEXICAL_WEIGHT: float = 0.40
     HYBRID_RRF_K: int = 60
@@ -156,6 +192,9 @@ class Settings(BaseSettings):
 
     ANALYTICS_TOP_SKILLS: int = 20
     CACHE_TTL_QUERY: int = 60
+    # Scored requirement->candidate matches are expensive (embedding + retrieval + rerankers). They are keyed by
+    # JD version and index epoch, so they self-invalidate on any change and can safely live long.
+    CACHE_TTL_MATCHES: int = 86400
     CACHE_TTL_SESSION: int = 86400  # 24 hours for user authentication sessions
 
     # Redis connection settings

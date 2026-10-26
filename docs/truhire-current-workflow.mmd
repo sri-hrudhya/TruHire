@@ -1,0 +1,189 @@
+%%{init: {"theme": "base", "flowchart": {"curve": "basis", "nodeSpacing": 28, "rankSpacing": 48}, "themeVariables": {"fontFamily": "Segoe UI, Arial, sans-serif", "fontSize": "14px"}}}%%
+flowchart TB
+    %% ============ STAGE 0 ============
+    subgraph S0["0 - ACCESS (implemented)"]
+        direction LR
+        A1["Register / Login<br/>/api/auth/register, /login, /me<br/>JWT bearer token"]
+        A2["Protected React app<br/>Sidebar + Navbar<br/>unauthenticated or 401 returns to /login"]
+        A1 --> A2
+    end
+
+    %% ============ STAGE 1 ============
+    subgraph S1["1 - RESUME INGESTION  (/ingestion, /ingestion/history)"]
+        direction TB
+        I1["Upload resume batch<br/>POST /api/ingest/upload<br/>size + batch-size limits, rate limited"]
+        I2["IngestionBatch row created<br/>background task (default) or arq worker if USE_ARQ_QUEUE"]
+        I3{"Exact duplicate?<br/>SHA-256 file hash"}
+        I4["Extract text<br/>PDF / DOCX / DOC / RTF / ODT / TXT / images via OCR"]
+        I5{"Readable text and<br/>prompt-injection screen passed?"}
+        I6["Reject file<br/>logged in batch history and AI audit"]
+        I7["Store original file<br/>Parse resume: regex baseline + LLM merge<br/>name, email, phone, skills, experience,<br/>education, location, job titles<br/>PII detection"]
+        I8["Create Candidate row<br/>display ID TRU-CN-nnnn, status New"]
+        I9["PII-redact text, chunk, embed<br/>local embedding model"]
+        I10[("Qdrant<br/>vector index")]
+        I11[("OpenSearch<br/>BM25 lexical index")]
+        I12["Live batch progress polling<br/>Ingestion History page:<br/>filter by time, status, name"]
+        I1 --> I2 --> I3
+        I3 -- yes --> I12
+        I3 -- no --> I4 --> I5
+        I5 -- no --> I6 --> I12
+        I5 -- yes --> I7 --> I8 --> I9
+        I9 --> I10
+        I9 --> I11
+        I10 --> I12
+        I11 --> I12
+    end
+
+    %% ============ STAGE 2 ============
+    subgraph S2["2 - REQUIREMENT / JD MANAGEMENT  (/requirements)"]
+        direction TB
+        R1["Create requirement<br/>paste text OR upload JD file<br/>POST /job-descriptions/extract-text, then review and edit"]
+        R2["Save requirement<br/>POST /api/job-descriptions<br/>display ID TRU-JD-nnnn, version 1"]
+        R3["Edit, delete, view file<br/>edit of JD text bumps jd_version<br/>and clears summary"]
+        R4["Optional AI JD summary<br/>POST .../summarize"]
+        R5["JD search filters<br/>location, role, work mode<br/>extracted once per jd_version"]
+        R1 --> R2 --> R3
+        R3 --> R4
+        R3 --> R5
+    end
+
+    %% ============ STAGE 3 ============
+    subgraph S3["3 - MATCHING AND RANKING  (shared by Requirements and Search)"]
+        direction TB
+        M0{"Entry point"}
+        M1["Requirement view<br/>GET /job-descriptions/id/matches<br/>JD only, no typed query"]
+        M2["Candidate Search page<br/>POST /api/search<br/>typed query, skill chips, min experience,<br/>location, role, optional requirement"]
+        M3["Query parsing<br/>dictionary + free-form skill chips<br/>years of experience, append / replace modifiers"]
+        M4["Hybrid retrieval<br/>Qdrant vector + OpenSearch BM25<br/>location / role filters applied in both<br/>fused with weighted RRF<br/>SQL fallback if indexes return nothing"]
+        M5["Exact location / role check<br/>then skill-chip AND filter<br/>and min-experience filter"]
+        M6["Deterministic hybrid score 0-100<br/>0.6 x semantic + 0.4 x skill coverage<br/>minus experience and education penalties<br/>skills from JD via LLM, regex fallback"]
+        M7["BGE cross-encoder rerank<br/>bounded pool, optional, skipped if unavailable"]
+        M8["Laya batch rerank<br/>bounded shortlist, 20% blend<br/>skipped if unavailable"]
+        M9{"Requirement selected<br/>and no typed query?"}
+        M10["Persist CandidateMatch<br/>score, breakdown, summary, cited quote<br/>keyed by candidate and requirement"]
+        M11["Not persisted<br/>ad-hoc target scored in memory"]
+        M12["Top-N explanations<br/>LLM summary with guardrail check<br/>heuristic summary as fallback"]
+        M13{"Requirement view?"}
+        M14["Keep only score >= 50<br/>REQUIREMENT_MATCH_THRESHOLD"]
+        M15["Return all top-N<br/>saved search state per user"]
+        M0 --> M1
+        M0 --> M2
+        M2 --> M3
+        M1 --> M4
+        M3 --> M4
+        M4 --> M5 --> M6 --> M7 --> M8 --> M9
+        M9 -- yes --> M10
+        M9 -- no --> M11
+        M10 --> M12
+        M11 --> M12
+        M12 --> M13
+        M13 -- yes --> M14
+        M13 -- no --> M15
+    end
+
+    %% ============ STAGE 4 ============
+    subgraph S4["4 - REVIEW AND SHORTLISTING"]
+        direction TB
+        V1["Results list<br/>score breakdown, matched / missing skills,<br/>AI summary and cited quote"]
+        V2["Candidate detail page /candidates/id<br/>profile, resume preview, scores per requirement"]
+        V3{"Recruiter decision"}
+        V4["Per-requirement status<br/>Pending Review / Shortlisted / Not Shortlisted"]
+        V5["Global candidate status<br/>New / Shortlisted / Interviewed / Rejected"]
+        V6["Export candidates<br/>XLSX or CSV"]
+        V1 --> V2
+        V1 --> V3
+        V2 --> V3
+        V3 --> V4
+        V3 --> V5
+        V1 --> V6
+    end
+
+    %% ============ STAGE 5 ============
+    subgraph S5["5 - CANDIDATE COMMUNICATION  (/email)"]
+        direction TB
+        E1{"Per-requirement status is<br/>Shortlisted or Not Shortlisted<br/>and candidate has email?"}
+        E2["Generate draft per candidate<br/>POST /api/email/generate<br/>invitation or regret, LLM written"]
+        E3["Recruiter edits and confirms<br/>POST /api/email/send<br/>idempotency key, resend confirmation"]
+        E4{"SMTP configured?"}
+        E5["Send via SMTP<br/>status sent or failed"]
+        E6["Simulated delivery<br/>status simulated, nothing transmitted"]
+        E7["Email history per requirement<br/>retry failed emails"]
+        E1 -- yes --> E2 --> E3 --> E4
+        E1 -- no --> X1["Blocked with reason"]
+        E4 -- yes --> E5 --> E7
+        E4 -- no --> E6 --> E7
+    end
+
+    %% ============ CROSS CUTTING ============
+    subgraph S6["6 - OPERATIONS AND GOVERNANCE"]
+        direction LR
+        O1["Analytics page /analytics<br/>totals, top skills, experience, score buckets,<br/>status funnel, ingestion timeline"]
+        O2["AI audit log<br/>every model call, guardrail verdict, screening block<br/>PII-redacted previews"]
+        O3["Data retention<br/>scheduled cleanup + manual cleanup<br/>removes resumes, vectors, search docs"]
+        O4["Reparse / reindex endpoints<br/>POST /api/ingest/reparse, /reindex, GET /index-status<br/>API only, no UI button"]
+        O5["Redis cache + OpenSearch observability middleware"]
+    end
+
+    subgraph S7["LLM provider chain (chat completions)"]
+        direction LR
+        L1["vLLM primary"] --> L2["OpenRouter"] --> L3["Groq"] --> L4["Gemini"]
+    end
+
+    DB[("PostgreSQL<br/>users, candidates, positions, matches,<br/>statuses, email records, batches,<br/>conversations, search state, audit events")]
+
+    %% ============ INTER-STAGE FLOW ============
+    A2 --> I1
+    A2 --> R1
+    A2 --> M2
+    I8 -.-> DB
+    R2 -.-> DB
+    I10 -. candidates searchable .-> M4
+    I11 -. candidates searchable .-> M4
+    R2 --> M1
+    R5 -. prefill filters .-> M2
+    M14 --> V1
+    M15 --> V1
+    V4 --> E1
+    M10 -.-> DB
+    V4 -.-> DB
+    E7 -.-> DB
+    I7 -. LLM .-> L1
+    M12 -. LLM .-> L1
+    E2 -. LLM .-> L1
+    R4 -. LLM .-> L1
+    O2 -.- DB
+    O1 -.- DB
+
+    %% ============ STYLES ============
+    classDef access fill:#E8EAF6,stroke:#3949AB,color:#1A237E
+    classDef ingest fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
+    classDef req fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
+    classDef match fill:#FFF3E0,stroke:#EF6C00,color:#E65100
+    classDef review fill:#F3E5F5,stroke:#7B1FA2,color:#4A148C
+    classDef comm fill:#E0F7FA,stroke:#00838F,color:#006064
+    classDef ops fill:#ECEFF1,stroke:#455A64,color:#263238
+    classDef decision fill:#FFFDE7,stroke:#F9A825,color:#5D4037
+    classDef store fill:#FFEBEE,stroke:#C62828,color:#B71C1C
+    classDef partial fill:#FFFDE7,stroke:#F9A825,color:#5D4037,stroke-dasharray:5 3
+    classDef reject fill:#FFEBEE,stroke:#C62828,color:#B71C1C
+
+    class A1,A2 access
+    class I1,I2,I4,I7,I8,I9,I12 ingest
+    class I3,I5,M0,M9,M13,V3,E1,E4 decision
+    class I6,X1 reject
+    class I10,I11,DB store
+    class R1,R2,R3,R4,R5 req
+    class M1,M2,M3,M4,M5,M6,M7,M8,M10,M11,M12,M14,M15 match
+    class V1,V2,V4,V5,V6 review
+    class E2,E3,E5,E6,E7 comm
+    class O1,O2,O3,O5,L1,L2,L3,L4 ops
+    class O4 partial
+
+    style S0 fill:#F5F6FF,stroke:#3949AB,stroke-width:2px
+    style S1 fill:#F3F9FF,stroke:#1565C0,stroke-width:2px
+    style S2 fill:#F4FBF4,stroke:#2E7D32,stroke-width:2px
+    style S3 fill:#FFF9F2,stroke:#EF6C00,stroke-width:2px
+    style S4 fill:#FAF4FC,stroke:#7B1FA2,stroke-width:2px
+    style S5 fill:#F1FCFD,stroke:#00838F,stroke-width:2px
+    style S6 fill:#F7F8F9,stroke:#455A64,stroke-width:2px
+    style S7 fill:#F7F8F9,stroke:#455A64,stroke-width:2px

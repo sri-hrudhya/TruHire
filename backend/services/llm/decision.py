@@ -7,18 +7,15 @@ signal on top, or is skipped entirely (falling back to today's behavior) when un
 or unconfident.
 """
 import hashlib
-from typing import List, Literal, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from backend.config import settings
 from backend.models import Candidate, CandidateMatch, Position
 from backend.services.common.cache import get_cache, set_cache
 from backend.services.common.ai_audit import ai_feature
-from backend.services.llm.laya_service import LayaDecision, LayaUnavailable, ask_choice, ask_score_batch, ask_yesno
+from backend.services.llm.laya_service import LayaUnavailable, ask_score_batch
 
 RERANK_QUESTION = "How strong is this candidate's overall fit for this job description?"
-
-ChatIntent = Literal["open_qa", "interview_decision"]
-
 
 def _cache_key(*parts: str) -> str:
     digest = hashlib.sha256("||".join(parts).encode("utf-8", "ignore")).hexdigest()
@@ -85,28 +82,3 @@ def rerank_scores_batch(items: List[Tuple[float, Candidate, Position]]) -> List[
 def should_reuse_summary(match: Optional[CandidateMatch], position: Position) -> bool:
     return bool(match and match.llm_summary and match.jd_version == position.jd_version)
 
-
-def classify_chat_intent(latest_message: str) -> ChatIntent:
-    try:
-        with ai_feature("chat_intent"):
-            decision = ask_choice(
-                latest_message[:1000],
-                "What kind of request is this?",
-                options=["open_qa", "interview_decision"],
-                criteria="interview_decision = asking whether to interview/hire one candidate. "
-                         "open_qa = anything else, including general questions about a candidate or JD.",
-            )
-        if decision.should_escalate or decision.answer not in ("open_qa", "interview_decision"):
-            return "open_qa"
-        return decision.answer
-    except LayaUnavailable:
-        return "open_qa"
-
-
-def decide_interview(candidate_context: str, jd_context: str) -> LayaDecision:
-    with ai_feature("interview_decision"):
-        return ask_yesno(
-            f"{candidate_context}\n\n{jd_context}",
-            "Should this candidate be interviewed for this role?",
-            criteria="Base the decision on skill overlap, experience, and education fit shown above.",
-        )

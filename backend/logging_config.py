@@ -13,7 +13,7 @@ from pathlib import Path
 from backend.config import settings
 
 _TEXT_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)s | trace=%(trace_id)s | %(message)s"
-_NOISY = {"httpx": "WARNING", "httpcore": "WARNING", "urllib3": "WARNING", "opensearch": "WARNING",
+_NOISY = {"httpx": "WARNING", "httpcore": "WARNING", "urllib3": "WARNING", "opensearch": "ERROR",
           "multipart": "WARNING", "asyncio": "WARNING", "watchfiles": "WARNING", "fastembed": "WARNING"}
 _configured = False
 

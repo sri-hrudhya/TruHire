@@ -91,24 +91,6 @@ def check_search_result(cited_quote: str, jd_text: str, summary: str) -> Guardra
     return _audit("search_result", result, summary)
 
 
-def check_chat_reply(reply: str, context: str) -> GuardrailResult:
-    grounded, grounded_reason = _laya_groundedness(reply, context)
-    safe, safe_reason = _laya_safety(reply)
-    result = GuardrailResult(grounded, safe, grounded_reason if not grounded else safe_reason)
-    return _audit("chat_reply", result, reply)
-
-
-def check_decision_reply(reply: str) -> GuardrailResult:
-    """
-    For a reply that's a judgment/decision statement (e.g. Laya's own direct
-    "should I interview this candidate" answer), not a claim extracted from context -
-    groundedness doesn't apply (there's no source text a decision needs to match
-    verbatim), only the safety/bias check does.
-    """
-    safe, safe_reason = _laya_safety(reply)
-    return _audit("decision_reply", GuardrailResult(True, safe, safe_reason), reply)
-
-
 def check_generated_text(text: str) -> GuardrailResult:
     """Safety-only check for free-form generated text (e.g. JD summaries)."""
     safe, safe_reason = _laya_safety(text)

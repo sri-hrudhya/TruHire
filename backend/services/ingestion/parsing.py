@@ -27,6 +27,51 @@ import os
 logger = logging.getLogger(__name__)
 _ocr_engine = None
 
+# Location / job-title heuristics are deliberately label- and shape-driven: they only report text the
+# resume itself states, and return nothing rather than guess (the LLM parse is the primary source).
+_LOCATION_LABEL = re.compile(r"^(?:current\s+|present\s+|preferred\s+)?(?:location|address|city|based\s+in|residence|place)\s*[:\-]\s*(.+)$", re.I)
+_TITLE_LABEL = re.compile(r"^(?:current\s+|present\s+|previous\s+)?(?:job\s+title|designation|title|role|position)\s*[:\-]\s*(.+)$", re.I)
+_ROLE_NOUN = re.compile(r"\b(?:engineer|developer|architect|manager|analyst|consultant|designer|scientist|administrator|specialist|programmer|tester|director|lead)\b", re.I)
+_NOT_A_TITLE = re.compile(r"\b(?:with|years?|experience|experienced|responsible|using|worked|working|developed|building|built|designed|for|the|an?|and|skills?|certified|certification|seeking|looking|objective|summary)\b", re.I)
+_TITLE_SPLIT = re.compile(r"\s+at\s+|\s+@\s+|\s*[|–—]\s*|\s+-\s+|,\s*")
+_CONTACT_TAIL = re.compile(r"\s*(?:[|•·]|\b(?:phone|mobile|email|e-mail|linkedin|github)\b).*$", re.I)
+
+
+def heuristic_location(lines) -> str:
+    for line in lines[:25]:
+        match = _LOCATION_LABEL.match(line)
+        if match:
+            value = _CONTACT_TAIL.sub("", match.group(1)).strip(" ,.;")
+            if 2 <= len(value) <= 100 and "@" not in value:
+                return value
+    return ""
+
+
+def heuristic_job_titles(lines) -> list:
+    titles = []
+    for line in lines:
+        labeled = _TITLE_LABEL.match(line)
+        if labeled:
+            segments = [labeled.group(1)]
+        elif len(line.split()) <= 12 and not re.search(r"[.!?:;]$", line):
+            segments = [line]
+        else:
+            segments = []
+        for segment in segments:
+            for part in _TITLE_SPLIT.split(_CONTACT_TAIL.sub("", segment)):
+                part = part.strip(" -•*")
+                words = part.split()
+                if not (1 < len(words) <= 6) or not _ROLE_NOUN.search(part):
+                    continue
+                if _NOT_A_TITLE.search(part) or re.search(r"\d", part) or not part[0].isupper():
+                    continue
+                if part not in titles:
+                    titles.append(part)
+        if len(titles) >= 10:
+            break
+    return titles
+
+
 PDF_EXTENSIONS = {".pdf"}
 DOCX_EXTENSIONS = {".docx"}
 DOC_EXTENSIONS = {".doc"}
@@ -294,6 +339,8 @@ def heuristic_parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
         "extracted_skills": found_skills,
         "years_experience": round(years_exp, 1),
         "education": education,
+        "location": heuristic_location(lines),
+        "job_titles": heuristic_job_titles(lines),
         "raw_text": raw_text
     }
 
@@ -330,5 +377,7 @@ def parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
         "extracted_skills": merged_skills,
         "years_experience": llm_result["years_experience"] if llm_result["years_experience"] > 0 else baseline["years_experience"],
         "education": llm_result["education"] if llm_result["education"] != "Not Specified" else baseline["education"],
+        "location": llm_result.get("location") or baseline["location"],
+        "job_titles": llm_result.get("job_titles") or baseline["job_titles"],
         "raw_text": raw_text,
     }

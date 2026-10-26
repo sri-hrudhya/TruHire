@@ -6,6 +6,7 @@ import uuid
 import httpx
 from backend.config import settings
 from backend.services.common.cache import bump_index_epoch
+from backend.services.retrieval.filters import SearchFilters, NO_FILTERS, qdrant_filter
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +57,35 @@ def _collection_body(vector_size: int) -> Dict[str, Any]:
     return body
 
 
+# candidate_id keeps delete-by-filter fast; the others serve the location/role search filters.
+# Clusters in strict mode reject filters on unindexed fields. Creating an index is idempotent.
+_PAYLOAD_INDEXES = ("candidate_id", "location_keys", "role_tokens")
+
+
 def _ensure_payload_index() -> None:
-    """Keyword index on candidate_id: delete-by-filter stays fast and works on clusters
-    with strict mode (which rejects filters on unindexed fields)."""
     with httpx.Client(timeout=15) as client:
-        response = client.put(
-            _url(f"/collections/{settings.QDRANT_COLLECTION}/index?wait=true"),
-            headers=_headers(), json={"field_name": "candidate_id", "field_schema": "keyword"},
-        )
-        response.raise_for_status()
+        for field in _PAYLOAD_INDEXES:
+            response = client.put(
+                _url(f"/collections/{settings.QDRANT_COLLECTION}/index?wait=true"),
+                headers=_headers(), json={"field_name": field, "field_schema": "keyword"},
+            )
+            response.raise_for_status()
+
+
+_filter_indexes_ready = False
+
+
+def _ensure_filter_indexes_once() -> None:
+    """Collections created before location/role filters existed lack their payload indexes (only
+    needed on strict-mode clusters). Create them lazily on first filtered search; never fail the search."""
+    global _filter_indexes_ready
+    if _filter_indexes_ready:
+        return
+    try:
+        _ensure_payload_index()
+        _filter_indexes_ready = True
+    except Exception as exc:
+        logger.warning(f"Qdrant filter payload indexes could not be ensured: {exc}")
 
 
 def ensure_collection(vector_size: int) -> None:
@@ -170,11 +191,17 @@ def delete_candidates_batch(candidate_ids: List[str]) -> None:
         logger.warning(f"Qdrant batch delete points note: {exc}")
 
 
-def search_vectors(query_vector: List[float], top_k: int = 20) -> List[Dict[str, Any]]:
-    """Chunk-level search aggregated to one row per candidate (best chunk wins)."""
+def search_vectors(query_vector: List[float], top_k: int = 20, filters: SearchFilters = NO_FILTERS) -> List[Dict[str, Any]]:
+    """Chunk-level search aggregated to one row per candidate (best chunk wins). Location/role
+    filters are applied inside Qdrant, before top-k, so a filtered search is not starved by
+    ineligible candidates occupying the result window."""
     if not collection_exists():
         return []
     body: Dict[str, Any] = {"vector": query_vector, "limit": top_k * 4, "with_payload": True, "with_vector": False}
+    flt = qdrant_filter(filters)
+    if flt:
+        body["filter"] = flt
+        _ensure_filter_indexes_once()
     if settings.QDRANT_QUANTIZATION:
         body["params"] = {"quantization": {"rescore": True, "oversampling": settings.QDRANT_RESCORE_OVERSAMPLING}}
     with httpx.Client(timeout=30) as client:

@@ -2,10 +2,10 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from backend.database import get_db
-from backend.models import Candidate, CandidateMatch, Position, RequirementCandidateStatus, User
+from backend.models import CANDIDATE_STATUSES, NOTICE_PERIOD_UNITS, Candidate, CandidateAssignment, CandidateComment, CandidateMatch, Position, RequirementCandidateStatus, User
 from backend.auth import get_current_user
 from backend.services.retrieval.opensearch import delete_candidate as delete_lexical
 from backend.services.retrieval.qdrant import delete_candidate as delete_vector
@@ -17,6 +17,28 @@ router = APIRouter(prefix="/api/candidates", tags=["candidates"])
 
 class CandidateStatusUpdateRequest(BaseModel): status: str
 class CandidateDeleteRequest(BaseModel): ids: List[str]
+
+MAX_NOTICE_DAYS = 365 * 2
+_UNIT_DAYS = {"Days": 1, "Weeks": 7, "Months": 30}
+
+
+class NoticePeriodRequest(BaseModel):
+    """Both fields null clears the notice period; otherwise a non-negative number and a known unit."""
+    value: Optional[float] = Field(default=None, ge=0)
+    unit: Optional[str] = None
+
+    @field_validator("unit")
+    @classmethod
+    def _known_unit(cls, unit):
+        if unit is not None and unit not in NOTICE_PERIOD_UNITS:
+            raise ValueError(f"must be one of: {', '.join(NOTICE_PERIOD_UNITS)}")
+        return unit
+
+    def check(self) -> None:
+        if (self.value is None) != (self.unit is None):
+            raise HTTPException(status_code=422, detail="Notice period needs both a number and a unit (Days, Weeks or Months).")
+        if self.value is not None and self.value * _UNIT_DAYS[self.unit] > MAX_NOTICE_DAYS:
+            raise HTTPException(status_code=422, detail="Notice period cannot exceed 2 years.")
 
 def invalidate_candidate_cache(candidate_id: Optional[str] = None):
     clear_cache("candidates:list:")
@@ -38,7 +60,11 @@ def _serialize_candidate(c: Candidate) -> Dict[str, Any]:
         "extracted_skills": c.extracted_skills or [],
         "years_experience": c.years_experience,
         "education": c.education,
+        "location": c.location,
+        "job_titles": c.job_titles or [],
         "resume_text": c.resume_text,
+        "notice_period_value": c.notice_period_value,
+        "notice_period_unit": c.notice_period_unit,
         "status": c.status,
         "status_updated_by": c.status_updated_by,
         "status_updated_at": c.status_updated_at.isoformat() if c.status_updated_at else None,
@@ -106,7 +132,7 @@ def update_candidate_status(id: str, req: CandidateStatusUpdateRequest, db: Sess
     cand = db.query(Candidate).filter(Candidate.id == id).first()
     if not cand:
         raise HTTPException(status_code=404, detail="Candidate not found.")
-    if req.status not in ["New", "Shortlisted", "Interviewed", "Rejected"]:
+    if req.status not in CANDIDATE_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status.")
     cand.status = req.status
     cand.status_updated_by = user.id
@@ -117,12 +143,27 @@ def update_candidate_status(id: str, req: CandidateStatusUpdateRequest, db: Sess
     return {"id": cand.id, "display_id": cand.display_id, "status": cand.status, "status_updated_by": cand.status_updated_by, "status_updated_at": cand.status_updated_at}
 
 
+@router.patch("/{id}/notice-period")
+def update_notice_period(id: str, req: NoticePeriodRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    cand = db.query(Candidate).filter(Candidate.id == id).first()
+    if not cand:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    req.check()
+    cand.notice_period_value = req.value
+    cand.notice_period_unit = req.unit
+    db.commit()
+    invalidate_candidate_cache(id)
+    return {"id": cand.id, "notice_period_value": cand.notice_period_value, "notice_period_unit": cand.notice_period_unit}
+
+
 def _remove_candidate(cand: Candidate, db: Session):
     delete_vector(cand.id)
     delete_lexical(cand.id)
     if resolve_stored_file(cand.resume_file_url):
         delete_file_by_url_or_path(cand.resume_file_url)
     db.query(RequirementCandidateStatus).filter(RequirementCandidateStatus.candidate_id == cand.id).delete(synchronize_session=False)
+    db.query(CandidateAssignment).filter(CandidateAssignment.candidate_id == cand.id).delete(synchronize_session=False)
+    db.query(CandidateComment).filter(CandidateComment.candidate_id == cand.id).delete(synchronize_session=False)
     db.delete(cand)
 
 

@@ -1,19 +1,36 @@
 """OpenSearch lexical/BM25 retrieval layer for hybrid search."""
 import logging
+import time
 from typing import Any, Dict, List, Optional
 from opensearchpy import OpenSearch
 from backend.config import settings
 from backend.services.common.cache import bump_index_epoch
+from backend.services.retrieval.filters import SearchFilters, NO_FILTERS, opensearch_filters
 
 logger = logging.getLogger(__name__)
 
 _client: Optional[OpenSearch] = None
+# When OpenSearch is down, don't re-ping (4s+ each) on every call; retry after a cooldown.
+_RETRY_COOLDOWN_SEC = 60
+_down_until = 0.0
+
+# Mapping for the filterable fields. Added to indexes created before they existed (put_mapping only
+# adds fields), once per process; existing documents gain values when re-indexed.
+_FILTER_PROPERTIES = {
+    "location": {"type": "text"},
+    "location_keys": {"type": "keyword"},
+    "job_titles": {"type": "text"},
+    "role_tokens": {"type": "keyword"},
+}
+_mapping_synced = False
 
 
 def get_opensearch_client() -> Optional[OpenSearch]:
-    global _client
+    global _client, _down_until
     if _client is not None:
         return _client
+    if time.monotonic() < _down_until:
+        return None
     try:
         kwargs: Dict[str, Any] = {
             "hosts": [settings.OPENSEARCH_URL],
@@ -30,8 +47,10 @@ def get_opensearch_client() -> Optional[OpenSearch]:
         if client.ping():
             _client = client
             return client
+        logger.warning(f"OpenSearch not responding at {settings.OPENSEARCH_URL}; lexical search disabled, retrying in {_RETRY_COOLDOWN_SEC}s")
     except Exception as exc:
         logger.warning(f"OpenSearch unavailable: {exc}")
+    _down_until = time.monotonic() + _RETRY_COOLDOWN_SEC
     return None
 
 
@@ -50,12 +69,23 @@ def init_opensearch_index() -> bool:
                     "search_text": {"type": "text"},
                     "skills": {"type": "keyword"},
                     "years_experience": {"type": "float"},
+                    **_FILTER_PROPERTIES,
                 }}
             })
+        else:
+            _sync_filter_mapping(client, index)
         return True
     except Exception as exc:
         logger.warning(f"OpenSearch index initialization failed: {exc}")
         return False
+
+
+def _sync_filter_mapping(client: OpenSearch, index: str) -> None:
+    global _mapping_synced
+    if _mapping_synced:
+        return
+    client.indices.put_mapping(index=index, body={"properties": _FILTER_PROPERTIES})
+    _mapping_synced = True
 
 
 def _candidate_doc(candidate_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -65,6 +95,10 @@ def _candidate_doc(candidate_id: str, metadata: Dict[str, Any]) -> Dict[str, Any
         "search_text": metadata.get("search_text", ""),
         "skills": metadata.get("skills", []),
         "years_experience": float(metadata.get("years_experience", 0.0)),
+        "location": metadata.get("location", ""),
+        "location_keys": metadata.get("location_keys", []),
+        "job_titles": metadata.get("job_titles", []),
+        "role_tokens": metadata.get("role_tokens", []),
     }
 
 
@@ -120,7 +154,7 @@ def delete_candidates_batch(candidate_ids: List[str]) -> None:
         logger.warning(f"OpenSearch batch delete note: {exc}")
 
 
-def search_lexical(query_text: str, top_k: int = 50, filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None) -> List[Dict[str, Any]]:
+def search_lexical(query_text: str, top_k: int = 50, filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, filters: SearchFilters = NO_FILTERS) -> List[Dict[str, Any]]:
     client = get_opensearch_client()
     if not client or not query_text.strip():
         return []
@@ -131,12 +165,13 @@ def search_lexical(query_text: str, top_k: int = 50, filter_skills: Optional[Lis
         "type": "best_fields",
         "operator": "or"
     }}]
-    filters: List[Dict[str, Any]] = []
+    clauses: List[Dict[str, Any]] = []
     if filter_skills:
-        filters.append({"terms": {"skills": filter_skills}})
+        clauses.append({"terms": {"skills": filter_skills}})
     if min_experience is not None:
-        filters.append({"range": {"years_experience": {"gte": min_experience}}})
-    body = {"size": top_k, "query": {"bool": {"must": must, "filter": filters}}}
+        clauses.append({"range": {"years_experience": {"gte": min_experience}}})
+    clauses.extend(opensearch_filters(filters))
+    body = {"size": top_k, "query": {"bool": {"must": must, "filter": clauses}}}
     try:
         response = client.search(index=settings.OPENSEARCH_INDEX, body=body)
     except Exception as exc:

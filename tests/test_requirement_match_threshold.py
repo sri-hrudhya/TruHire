@@ -168,7 +168,7 @@ def stub_retrieval(monkeypatch):
     """Real execute_candidate_search; only external services are stubbed."""
     pool = {"vector": []}
     monkeypatch.setattr(search_module, "generate_embedding", lambda text: [0.1, 0.2])
-    monkeypatch.setattr(search_module, "search_vectors", lambda vec, k: list(pool["vector"]))
+    monkeypatch.setattr(search_module, "search_vectors", lambda vec, k, filters=None: list(pool["vector"]))
     monkeypatch.setattr(search_module, "search_lexical", lambda *a, **k: [])
     monkeypatch.setattr(search_module, "extract_skills_from_jd", lambda text: ["Python", "FastAPI"])
     monkeypatch.setattr(search_module.decision, "rerank_scores_batch", lambda items: [(s, None) for s, _, _ in items])
@@ -296,3 +296,35 @@ def test_query_and_skill_chips_narrow_within_requirement(env, stub_retrieval):
     # Scores are always the requirement-based hybrid score (0-100), never a flat placeholder.
     assert all(0 < r["match_score"] <= 100 for r in everyone["results"])
     assert everyone["scored_against_jd"]["id"] == jd
+
+
+def test_jd_in_a_category_is_scored_like_any_other_and_keeps_matches_when_recategorised(env, stub_retrieval):
+    """Real scoring service and DB: moving a JD between categories changes neither its scores nor its saved CandidateMatch rows."""
+    cand = env["make_cands"](1, skills=["Python", "FastAPI"])[0]
+    stub_retrieval["vector"] = [{"candidate_id": cand, "score": 0.9}]
+    client, headers = env["client"], env["headers"]
+    standalone, grouped = env["make_jd"](), env["make_jd"]()
+    assert client.put(f"/api/job-descriptions/{grouped}/demand", headers=headers, json={"demand_id": "default-demand-pega"}).status_code == 200
+
+    def scored(jd):
+        data = client.get(f"/api/job-descriptions/{jd}/matches", headers=headers).json()
+        return {m["candidate"]["id"]: m["match_score"] for m in data["matches"]}
+
+    assert scored(grouped) == scored(standalone) == {cand: 76.0}
+
+    def stored(jd):
+        db = SessionLocal()
+        try:
+            return {m.candidate_id: m.match_score for m in db.query(CandidateMatch).filter(CandidateMatch.position_id == jd).all()}
+        finally:
+            db.close()
+
+    before = stored(grouped)
+    assert before[cand] == 76.0
+    assert client.put(f"/api/job-descriptions/{grouped}/demand", headers=headers, json={"demand_id": "default-demand-java"}).status_code == 200
+    assert stored(grouped) == before  # match records untouched by re-categorising
+    db = SessionLocal()
+    try:
+        assert db.query(Candidate).filter(Candidate.id == cand).count() == 1
+    finally:
+        db.close()
