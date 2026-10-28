@@ -83,7 +83,7 @@ export default function JobDescriptionsPage() {
         ) : r.creating ? (
           <>
             <div className="section-head"><h2>New demand</h2></div>
-            <RequirementEditor key="new" jd={null} creating onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
+            <RequirementEditor key="new" jd={null} creating demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
           </>
         ) : jd ? (
           <>
@@ -109,7 +109,7 @@ export default function JobDescriptionsPage() {
               />
             )}
             {tab === 'details' && editing && (
-              <RequirementEditor key={`${jd.id}-${jd.jd_version}`} jd={jd} creating={false} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} onCancel={() => setEditing(false)} />
+              <RequirementEditor key={`${jd.id}-${jd.jd_version}`} jd={jd} creating={false} demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} onCancel={() => setEditing(false)} />
             )}
             {tab === 'matches' && (
               <RequirementMatches

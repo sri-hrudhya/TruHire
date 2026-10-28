@@ -85,7 +85,8 @@ class Position(Base):
     # JD details entered by the recruiter; NULL = not stated. status NULL on pre-status rows is treated as Open.
     status = Column(String, nullable=True, default=DEFAULT_JD_STATUS, index=True)
     role = Column(String, nullable=True)
-    experience_years = Column(Float, nullable=True)
+    experience_years = Column(Float, nullable=True)  # minimum years required
+    experience_max_years = Column(Float, nullable=True)
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)
     location = Column(String, nullable=True)

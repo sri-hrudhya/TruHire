@@ -142,9 +142,9 @@ def test_extract_details_leaves_unstated_fields_blank(monkeypatch):
     headers = {"Authorization": f"Bearer {get_auth_token()}"}
     text = "We are hiring somebody great to work with our team on exciting problems and grow together."
     data = client.post("/api/job-descriptions/extract-details", headers=headers, json={"title": "Great Hire", "jd_text": text}).json()
-    assert data == {"detected_title": None, "location": None, "experience_years": None}
+    assert data == {"detected_title": None, "location": None, "experience_years": None, "suggested_demand_id": None}
     blank = client.post("/api/job-descriptions/extract-details", headers=headers, json={"jd_text": "   "}).json()
-    assert blank == {"detected_title": None, "location": None, "experience_years": None}
+    assert blank == {"detected_title": None, "location": None, "experience_years": None, "suggested_demand_id": None}
 
 
 def test_extract_details_survives_extractor_failure(monkeypatch):

@@ -122,15 +122,15 @@ def test_classification_uses_content_not_the_title_or_file_name():
 
 # --- create / upload / edit ------------------------------------------------------------
 
-def test_create_path_auto_categorises_and_ignores_a_supplied_demand(made):
+def test_create_path_auto_categorises_unless_a_folder_is_chosen(made):
     h, make = made
     for title, body, expected in [("a", JAVA_JD, "Java"), ("b", GENAI_JD, "GenAI"), ("c", CAMUNDA_JD, "Camunda"),
                                   ("d", PEGA_JD, "Pega"), ("e", OTHER_JD, "Others")]:
         jd = make(f"{title} {uuid.uuid4().hex[:5]}", body)
         assert jd["demand_id"] == canonical_demand_id(expected) and _category_of(jd, h) == expected
-    # A client-supplied demand_id (old UI) cannot override classification.
+    # A folder the recruiter chose wins over classification.
     jd = make("forced", JAVA_JD, demand_id=canonical_demand_id("Pega"))
-    assert jd["demand_id"] == canonical_demand_id("Java")
+    assert jd["demand_id"] == canonical_demand_id("Pega")
     assert make("vague", OTHER_JD)["classification_note"]
 
 
@@ -145,15 +145,16 @@ def test_upload_path_classifies_from_extracted_document_text(made):
     assert _category_of(jd, h) == "Pega" and jd["original_filename"] == "java_developer.txt"
 
 
-def test_editing_content_reclassifies_and_keeps_identity(made):
+def test_editing_content_keeps_folder_and_identity(made):
     h, make = made
     jd = make(f"Edit {uuid.uuid4().hex[:5]}", JAVA_JD)
     assert _category_of(jd, h) == "Java"
     r = client.put(f"/api/job-descriptions/{jd['id']}", json={"jd_text": CAMUNDA_JD}, headers=h)
     assert r.status_code == 200
-    assert r.json()["id"] == jd["id"] and r.json()["jd_version"] == 2 and _category_of(jd, h) == "Camunda"
-    r = client.put(f"/api/job-descriptions/{jd['id']}", json={"jd_text": OTHER_JD}, headers=h)
-    assert _category_of(jd, h) == "Others" and r.json()["classification_note"]
+    assert r.json()["id"] == jd["id"] and r.json()["jd_version"] == 2 and _category_of(jd, h) == "Java"
+    # Only choosing another folder moves it.
+    r = client.put(f"/api/job-descriptions/{jd['id']}", json={"demand_id": canonical_demand_id("Camunda")}, headers=h)
+    assert _category_of(jd, h) == "Camunda"
     # A non-content edit leaves the category alone.
     client.put(f"/api/job-descriptions/{jd['id']}/demand", json={"demand_id": canonical_demand_id("Pega")}, headers=h)
     client.put(f"/api/job-descriptions/{jd['id']}", json={"original_filename": "x.txt"}, headers=h)

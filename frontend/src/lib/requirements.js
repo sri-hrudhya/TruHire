@@ -18,10 +18,19 @@ export function formatDateTime(value) {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export function formatExperience(years) {
-  if (years === null || years === undefined || years === '') return '—';
-  const n = Number(years);
-  return Number.isFinite(n) ? `${n} ${n === 1 ? 'yr' : 'yrs'}` : '—';
+const blank = (v) => v === null || v === undefined || v === '';
+
+// "3-5 yrs", "3+ yrs", "up to 5 yrs", "4 yrs" (min equals max) or "—".
+export function formatExperience(min, max) {
+  const lo = blank(min) ? null : Number(min);
+  const hi = blank(max) ? null : Number(max);
+  const okLo = lo !== null && Number.isFinite(lo);
+  const okHi = hi !== null && Number.isFinite(hi);
+  const unit = (n) => (n === 1 ? 'yr' : 'yrs');
+  if (okLo && okHi) return lo === hi ? `${lo} ${unit(lo)}` : `${lo}-${hi} yrs`;
+  if (okLo) return `${lo}+ ${unit(lo)}`;
+  if (okHi) return `up to ${hi} ${unit(hi)}`;
+  return '—';
 }
 
 // The role is only worth showing when it says something the title does not.
@@ -34,14 +43,16 @@ export const RESUME_LINKED = ['Mapped', 'Fulfilled'];
 
 // Form values -> API payload. Blank means "not stated" (null), so clearing a field is expressible.
 // The reason / resume ids are only sent with the status that needs them.
-export function detailsPayload({ location, clientName, experience, startDate, endDate, status, cancellationReason, candidateIds }) {
+export function detailsPayload({ demandId, location, clientName, experience, experienceMax, startDate, endDate, status, cancellationReason, candidateIds }) {
   const text = (v) => (v || '').trim() || null;
   return {
     ...(status === CANCELLED ? { cancellation_reason: text(cancellationReason) } : {}),
     ...(RESUME_LINKED.includes(status) ? { candidate_ids: candidateIds || [] } : {}),
+    ...(demandId ? { demand_id: demandId } : {}),
     location: text(location),
     client_name: text(clientName),
-    experience_years: experience === '' || experience === null || experience === undefined ? null : Number(experience),
+    experience_years: blank(experience) ? null : Number(experience),
+    experience_max_years: blank(experienceMax) ? null : Number(experienceMax),
     start_date: startDate || null,
     end_date: endDate || null,
     status,
@@ -49,11 +60,13 @@ export function detailsPayload({ location, clientName, experience, startDate, en
 }
 
 // Error message for unacceptable form values, or null.
-export function validateDetails({ experience, startDate, endDate }) {
-  if (experience !== '' && experience !== null && experience !== undefined) {
-    const n = Number(experience);
-    if (!Number.isFinite(n) || n < 0 || n > MAX_EXPERIENCE_YEARS) return `Experience must be a number from 0 to ${MAX_EXPERIENCE_YEARS} years.`;
+export function validateDetails({ experience, experienceMax, startDate, endDate }) {
+  for (const [label, value] of [['Min experience', experience], ['Max experience', experienceMax]]) {
+    if (blank(value)) continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_EXPERIENCE_YEARS) return `${label} must be a number from 0 to ${MAX_EXPERIENCE_YEARS} years.`;
   }
+  if (!blank(experience) && !blank(experienceMax) && Number(experienceMax) < Number(experience)) return 'Max experience cannot be less than min experience.';
   if (startDate && endDate && endDate < startDate) return 'End date cannot be before the start date.';
   return null;
 }
@@ -71,7 +84,7 @@ export const HISTORY_ACTION_LABELS = Object.freeze({
 });
 
 const FIELD_LABELS = {
-  title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Experience (yrs)', start_date: 'Start date',
+  title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Min experience (yrs)', experience_max_years: 'Max experience (yrs)', start_date: 'Start date',
   end_date: 'End date', location: 'Location', client_name: 'Client', status: 'Demand status', demand: 'Folder', reason: 'Reason',
   cancellation_reason: 'Cancellation reason', mapped_resumes: 'Resumes',
 };

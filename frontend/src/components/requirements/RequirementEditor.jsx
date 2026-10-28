@@ -9,9 +9,11 @@ import './requirements.css';
 // Create or edit one requirement: title, specification text and an optional source file (text is extracted).
 // Detail fields as form strings; the same shape is used to detect what the user actually changed.
 const initialDetails = (jd, creating, defaultStatus) => ({
+  demandId: creating ? '' : jd?.demand_id || '',
   location: creating ? '' : jd?.location || '',
   clientName: creating ? '' : jd?.client_name || '',
   experience: creating || jd?.experience_years == null ? '' : String(jd.experience_years),
+  experienceMax: creating || jd?.experience_max_years == null ? '' : String(jd.experience_max_years),
   startDate: creating ? '' : jd?.start_date || '',
   endDate: creating ? '' : jd?.end_date || '',
   status: creating ? defaultStatus : jd?.status || defaultStatus,
@@ -19,7 +21,7 @@ const initialDetails = (jd, creating, defaultStatus) => ({
   candidateIds: creating ? [] : (jd?.mapped_resumes || []).map((r) => r.id),
 });
 
-export default function RequirementEditor({ jd, creating, onSave, onSummarize, onNotice, onCancel }) {
+export default function RequirementEditor({ jd, creating, demands = [], onSave, onSummarize, onNotice, onCancel }) {
   const { accepted_jd_file_types: acceptedTypes, client_names: clientNames, default_jd_status: defaultStatus } = useMeta();
   const [initial] = useState(() => initialDetails(jd, creating, defaultStatus));
   const [details, setDetails] = useState(initial);
@@ -41,6 +43,7 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
     if (!title.trim() && found.detected_title) setTitle(found.detected_title);
     setDetails((d) => ({
       ...d,
+      demandId: d.demandId || (demands.some((x) => x.id === found.suggested_demand_id) ? found.suggested_demand_id : ''),
       location: d.location.trim() ? d.location : found.location || '',
       experience: d.experience !== '' ? d.experience : found.experience_years == null ? '' : String(found.experience_years),
     }));
@@ -90,7 +93,7 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
   const submit = async (e) => {
     e.preventDefault();
     if (!title.trim() || !text.trim()) return;
-    const problem = validateDetails(details);
+    const problem = !details.demandId ? 'Choose a demand folder.' : validateDetails(details);
     setFormError(problem);
     if (problem) return;
     setSaving(true);
@@ -147,6 +150,13 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
 
       <div className="detail-form">
         <div>
+          <label className="input-label" htmlFor="req-folder">Demand Folder</label>
+          <select id="req-folder" className="input-field" required value={details.demandId} onChange={setField('demandId')}>
+            <option value="">Select a folder</option>
+            {demands.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        <div>
           <label className="input-label" htmlFor="req-client">Client Name <span className="slug">(optional)</span></label>
           <select id="req-client" className="input-field" value={details.clientName} onChange={setField('clientName')}>
             <option value="">Select a client</option>
@@ -155,8 +165,12 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
           </select>
         </div>
         <div>
-          <label className="input-label" htmlFor="req-exp">Experience (years)</label>
-          <input id="req-exp" className="input-field" type="number" step="0.5" value={details.experience} onChange={setField('experience')} />
+          <label className="input-label" htmlFor="req-exp">Min Experience (years)</label>
+          <input id="req-exp" className="input-field" type="number" min="0" step="0.5" value={details.experience} onChange={setField('experience')} />
+        </div>
+        <div>
+          <label className="input-label" htmlFor="req-exp-max">Max Experience (years)</label>
+          <input id="req-exp-max" className="input-field" type="number" min="0" step="0.5" value={details.experienceMax} onChange={setField('experienceMax')} />
         </div>
         <div>
           <label className="input-label" htmlFor="req-location">Location</label>

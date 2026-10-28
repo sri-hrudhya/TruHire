@@ -68,7 +68,7 @@ export default function JdDetails({ jd, demandName, onStatus, onEdit, onOpenFile
           ['Client', jd.client_name || '—'],
           showRole(jd) && ['Role', jd.role],
           ['Location', jd.location || '—'],
-          ['Experience', formatExperience(jd.experience_years)],
+          ['Experience', formatExperience(jd.experience_years, jd.experience_max_years)],
         ]} />
         <Group title="Schedule" rows={[
           ['Start Date', formatDate(jd.start_date)],

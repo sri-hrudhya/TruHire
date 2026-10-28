@@ -65,6 +65,7 @@ def test_create_defaults_to_open_and_persists_details(ctx):
 @pytest.mark.parametrize("bad", [
     {"status": "Draft"}, {"status": "On Hold"}, {"experience_years": -1}, {"experience_years": 99},
     {"start_date": "2026-12-31", "end_date": "2026-01-01"}, {"start_date": "not-a-date"},
+    {"experience_years": 5, "experience_max_years": 3}, {"experience_max_years": 99},
 ])
 def test_invalid_jd_details_rejected(ctx, bad):
     client, headers, db, user, created = ctx
@@ -78,6 +79,32 @@ def test_update_rejects_end_before_existing_start_and_keeps_data(ctx):
     res = client.put(f"/api/job-descriptions/{jd['id']}", json={"end_date": "2026-10-01"}, headers=headers)
     assert res.status_code == 422
     assert _listed(client, headers, jd["id"])["end_date"] is None
+
+
+def test_chosen_folder_is_kept_and_can_be_changed_on_edit(ctx):
+    from backend.models import canonical_demand_id
+    client, headers, db, user, created = ctx
+    genai, pega = canonical_demand_id("GenAI"), canonical_demand_id("Pega")
+    jd = _create(client, headers, created, demand_id=genai)  # text is plain Java, but the recruiter chose GenAI
+    assert jd["demand_id"] == genai
+    # Editing the text does not re-classify the demand.
+    res = client.put(f"/api/job-descriptions/{jd['id']}", json={"jd_text": "Java developer with Spring Boot and Hibernate"}, headers=headers)
+    assert res.json()["demand_id"] == genai
+    # Picking another folder moves it, and the move is recorded in history.
+    res = client.put(f"/api/job-descriptions/{jd['id']}", json={"demand_id": pega}, headers=headers)
+    assert res.status_code == 200 and res.json()["demand_id"] == pega
+    assert any(r["changes"].get("demand", {}).get("new", "").endswith("Pega") for r in _history(client, headers, jd["id"]) if r["action"] == "updated")
+    assert client.put(f"/api/job-descriptions/{jd['id']}", json={"demand_id": "nope"}, headers=headers).status_code == 422
+
+
+def test_min_max_experience_persist_and_update_is_checked_against_stored_value(ctx):
+    client, headers, db, user, created = ctx
+    jd = _create(client, headers, created, experience_years=3, experience_max_years=5)
+    listed = _listed(client, headers, jd["id"])
+    assert (listed["experience_years"], listed["experience_max_years"]) == (3, 5)
+    res = client.put(f"/api/job-descriptions/{jd['id']}", json={"experience_max_years": 2}, headers=headers)
+    assert res.status_code == 422
+    assert _listed(client, headers, jd["id"])["experience_max_years"] == 5
 
 
 def test_history_records_create_update_status_delete_newest_first(ctx):

@@ -17,16 +17,29 @@ run('JD statuses are exactly Open, Cancelled, Fulfilled, Mapped (no Closed)', ()
 run('details validation: experience range and date order', () => {
   assert.equal(validateDetails({ experience: '5', startDate: '2026-01-01', endDate: '2026-01-01' }), null);
   assert.equal(validateDetails({ experience: '', startDate: '', endDate: '' }), null);
-  assert.match(validateDetails({ experience: '-1' }), /Experience/);
-  assert.match(validateDetails({ experience: '61' }), /Experience/);
-  assert.match(validateDetails({ experience: 'abc' }), /Experience/);
+  assert.match(validateDetails({ experience: '-1' }), /Min experience/);
+  assert.match(validateDetails({ experience: '61' }), /Min experience/);
+  assert.match(validateDetails({ experience: 'abc' }), /Min experience/);
   assert.match(validateDetails({ startDate: '2026-02-01', endDate: '2026-01-01' }), /End date/);
 });
 
 run('detailsPayload turns blanks into null and trims text', () => {
   assert.deepEqual(detailsPayload({ role: 'ignored', location: '  Pune ', experience: '', startDate: '', endDate: '', status: 'Open' }),
-    { location: 'Pune', client_name: null, experience_years: null, start_date: null, end_date: null, status: 'Open' });
+    { location: 'Pune', client_name: null, experience_years: null, experience_max_years: null, start_date: null, end_date: null, status: 'Open' });
   assert.equal(detailsPayload({ experience: '0', status: 'Open' }).experience_years, 0);
+  assert.equal(detailsPayload({ experience: '3', experienceMax: '5', status: 'Open' }).experience_max_years, 5);
+});
+
+run('min / max experience: validation and display', () => {
+  assert.equal(validateDetails({ experience: '3', experienceMax: '5' }), null);
+  assert.equal(validateDetails({ experience: '', experienceMax: '5' }), null);
+  assert.match(validateDetails({ experience: '5', experienceMax: '3' }), /Max experience cannot be less/);
+  assert.match(validateDetails({ experienceMax: '61' }), /Max experience/);
+  assert.equal(formatExperience(3, 5), '3-5 yrs');
+  assert.equal(formatExperience(3, null), '3+ yrs');
+  assert.equal(formatExperience(null, 5), 'up to 5 yrs');
+  assert.equal(formatExperience(4, 4), '4 yrs');
+  assert.equal(formatExperience(null, null), '—');
 });
 
 run('changedDetails sends only edited fields', () => {
@@ -50,8 +63,8 @@ run('a status that needs extra data sends it, and only with that status', () => 
 run('date-only values keep their calendar day; missing values show a dash', () => {
   assert.match(formatDate('2026-11-01'), /1/);
   assert.equal(formatDate(null), '—');
-  assert.equal(formatExperience(1), '1 yr');
-  assert.equal(formatExperience(5), '5 yrs');
+  assert.equal(formatExperience(1), '1+ yr');
+  assert.equal(formatExperience(5), '5+ yrs');
   assert.equal(formatExperience(null), '—');
 });
 

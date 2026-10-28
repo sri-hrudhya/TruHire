@@ -33,12 +33,18 @@ MAX_DETAIL_CHARS = 200
 MAX_EXPERIENCE_YEARS = 60
 
 
+def _check_experience_range(low: Optional[float], high: Optional[float]) -> None:
+    if low is not None and high is not None and high < low:
+        raise ValueError("Max experience cannot be less than min experience.")
+
+
 class JDDetails(BaseModel):
     """Recruiter-entered JD fields shared by create and update. Blank text means "not stated"."""
     role: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     location: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     client_name: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
-    experience_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)
+    experience_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)  # minimum
+    experience_max_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: Optional[str] = None
@@ -54,6 +60,11 @@ class JDDetails(BaseModel):
         if not isinstance(value, str):
             raise ValueError("must be text")
         return value.strip() or None
+
+    @model_validator(mode="after")
+    def _experience_range(self):
+        _check_experience_range(self.experience_years, self.experience_max_years)
+        return self
 
     @field_validator("client_name")
     @classmethod
@@ -89,10 +100,11 @@ class PositionCreateRequest(JDDetails):
     jd_text: str
     file_url: Optional[str] = None
     original_filename: Optional[str] = None
-    demand_id: Optional[str] = None  # accepted for compatibility but ignored: the category is always auto-assigned
+    demand_id: Optional[str] = None  # the folder the recruiter chose; omitted (API callers) = auto-classified
 
 
 class PositionUpdateRequest(JDDetails):
+    demand_id: Optional[str] = None  # omitted = folder unchanged; edits never re-classify
     title: Optional[str] = None
     jd_text: Optional[str] = None
     file_url: Optional[str] = None
@@ -117,6 +129,7 @@ class PositionResponse(BaseModel):
     location: Optional[str] = None
     client_name: Optional[str] = None
     experience_years: Optional[float] = None
+    experience_max_years: Optional[float] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     updated_at: Optional[datetime] = None
@@ -153,6 +166,7 @@ class JDExtractResponse(BaseModel):
     detected_title: Optional[str] = None
     location: Optional[str] = None
     experience_years: Optional[float] = None
+    suggested_demand_id: Optional[str] = None
 
 
 class JDDetailsRequest(BaseModel):
@@ -164,13 +178,20 @@ class JDDetectedDetails(BaseModel):
     detected_title: Optional[str] = None
     location: Optional[str] = None
     experience_years: Optional[float] = None
+    suggested_demand_id: Optional[str] = None  # the classifier's confident guess, preselected in the folder dropdown
 
 
 def _classify_position(pos: Position) -> None:
-    """Assign pos.demand_id from its content (the single classification path for create/edit/upload)."""
+    """Auto-assign pos.demand_id from its content; used on create when the caller chose no folder."""
     result = classify_jd_detailed(pos.title, pos.jd_text)
     pos.demand_id = canonical_demand_id(result.category)
     pos.classification_note = result.note  # transient: surfaced in the response only
+
+
+def _checked_demand_id(demand_id: str) -> str:
+    if demand_id not in {canonical_demand_id(n) for n in DEFAULT_DEMAND_NAMES}:
+        raise HTTPException(422, "Choose one of: " + ", ".join(DEFAULT_DEMAND_NAMES) + ".")
+    return demand_id
 
 
 def invalidate_requirements_cache(jd_id: Optional[str] = None):
@@ -184,7 +205,7 @@ def invalidate_requirements_cache(jd_id: Optional[str] = None):
         clear_cache(f"requirements:matches:{jd_id}")
 
 
-TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "start_date", "end_date", "location", "client_name", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
+TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "start_date", "end_date", "location", "client_name", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
 _TEXT_PREVIEW_CHARS = 300
 
 
@@ -242,7 +263,11 @@ def _detect_details(title: str, jd_text: str) -> dict:
     Reuses extract_jd_filters (LLM, then heuristics); the role only counts as a title when it was
     read from the JD text, never when it merely echoes the supplied title.
     """
-    out = {"detected_title": None, "location": None, "experience_years": _stated_experience(jd_text)}
+    guess = classify_jd_detailed(title, jd_text)
+    out = {
+        "detected_title": None, "location": None, "experience_years": _stated_experience(jd_text),
+        "suggested_demand_id": canonical_demand_id(guess.category) if guess.confident else None,
+    }
     if out["experience_years"] is not None and not 0 <= out["experience_years"] <= MAX_EXPERIENCE_YEARS:
         out["experience_years"] = None
     try:
@@ -298,6 +323,7 @@ def _serialize_position(pos: Position, creator_name: Optional[str] = None, modif
         "cancellation_reason": pos.cancellation_reason if _is_status(pos, "Cancelled") else None,
         "mapped_resumes": _mapped_resumes(pos.mapped_candidate_ids, candidates or {}) if _is_status(pos, *RESUME_LINKED_JD_STATUSES) else [],
         "experience_years": experience,
+        "experience_max_years": pos.experience_max_years,
         "start_date": pos.start_date.isoformat() if pos.start_date else None,
         "end_date": pos.end_date.isoformat() if pos.end_date else None,
     }
@@ -342,9 +368,12 @@ def create_jd(req: PositionCreateRequest, db: Session, user: User) -> Position:
         original_filename=req.original_filename,
         status=DEFAULT_JD_STATUS,
         role=req.role, location=req.location, client_name=req.client_name, experience_years=req.experience_years,
-        start_date=req.start_date, end_date=req.end_date,
+        experience_max_years=req.experience_max_years, start_date=req.start_date, end_date=req.end_date,
     )
-    _classify_position(pos)
+    if req.demand_id:
+        pos.demand_id = _checked_demand_id(req.demand_id)
+    else:
+        _classify_position(pos)
     db.add(pos)
     db.flush()
     if req.status and req.status != DEFAULT_JD_STATUS:
@@ -420,15 +449,14 @@ def update_jd(jd_id: str, req: PositionUpdateRequest, db: Session, user: Optiona
     pos = get_jd(jd_id, db)
     before = _snapshot(pos)
     changed = False
-    content_changed = False
     if req.title and req.title.strip() != pos.title:
         pos.title = req.title.strip()
-        changed = content_changed = True
+        changed = True
     if req.jd_text and req.jd_text.strip() != pos.jd_text:
         pos.jd_text = req.jd_text.strip()
         pos.jd_version += 1
         pos.jd_summary = None
-        changed = content_changed = True
+        changed = True
     if req.file_url is not None:
         pos.file_url = _checked_jd_file_url(req.file_url)
         changed = True
@@ -436,25 +464,26 @@ def update_jd(jd_id: str, req: PositionUpdateRequest, db: Session, user: Optiona
         pos.original_filename = req.original_filename
         changed = True
     # Detail fields: a field the client sent (even as null) is applied, so a value can be cleared.
-    for field in ("role", "location", "client_name", "experience_years", "start_date", "end_date"):
+    for field in ("role", "location", "client_name", "experience_years", "experience_max_years", "start_date", "end_date"):
         if field in req.model_fields_set and getattr(req, field) != getattr(pos, field):
             setattr(pos, field, getattr(req, field))
             changed = True
+    if pos.experience_years is not None and pos.experience_max_years is not None and pos.experience_max_years < pos.experience_years:
+        db.rollback()
+        raise HTTPException(422, "Max experience cannot be less than min experience.")
     if req.status is not None and _apply_status(db, pos, req.status, req.cancellation_reason, req.candidate_ids):
         changed = True
     if pos.start_date and pos.end_date and pos.end_date < pos.start_date:
         db.rollback()
         raise HTTPException(422, "End date cannot be before start date.")
-    note = None
-    if content_changed:
-        _classify_position(pos)  # content edits re-categorise; there is no sticky manual override
-        note = pos.classification_note
+    if req.demand_id and req.demand_id != pos.demand_id:
+        pos.demand_id = _checked_demand_id(req.demand_id)  # the recruiter's choice; content edits never move a demand
+        changed = True
     if changed:
         _touch(pos, user)
         _record_changes(db, pos, before, user)
         db.commit()
         db.refresh(pos)
-        pos.classification_note = note
         invalidate_requirements_cache(pos.id)
     return _with_creator(pos, _creator_name(pos, db), db)
 

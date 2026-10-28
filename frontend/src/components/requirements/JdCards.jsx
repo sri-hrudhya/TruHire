@@ -54,7 +54,7 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onCreate }) {
                   </div>
                   <div className="info-card-row">
                     {showRole(jd) && <Fact label="Location">{jd.location || '—'}</Fact>}
-                    <Fact label="Experience">{formatExperience(jd.experience_years)}</Fact>
+                    <Fact label="Experience">{formatExperience(jd.experience_years, jd.experience_max_years)}</Fact>
                   </div>
                   <div className="info-card-row">
                     <Fact label="Start Date">{formatDate(jd.start_date)}</Fact>
