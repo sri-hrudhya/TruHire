@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Search, X } from 'lucide-react';
 import CategoryRow from '../CategoryRow';
+import TagInput from '../ui/TagInput';
 import { jdsInCategory, topNOptions } from '../../lib/categories';
 import { TOP_N_PRESETS } from '../../config/env';
 import { COPY } from '../../config/copy';
@@ -12,7 +13,8 @@ export default function SearchForm({ s }) {
   const { search: limits } = useMeta();
   const category = s.demands.find((d) => d.id === s.categoryId);
   const choices = jdsInCategory(s.jds, s.categoryId);
-  const hasFilters = s.chips.length > 0 || s.role.trim() || s.location.trim();
+  const suggested = s.jdFilterInfo?.locations?.length ? s.jdFilterInfo.locations : s.jdFilterInfo?.location ? [s.jdFilterInfo.location] : [];
+  const sameAsSuggested = suggested.length > 0 && suggested.length === s.locations.length && suggested.every((p, i) => p === s.locations[i]);
 
   return (
     <form className="search-form" onSubmit={(e) => { e.preventDefault(); s.run(); }}>
@@ -65,22 +67,23 @@ export default function SearchForm({ s }) {
         </label>
         <label className="search-field">
           <span className="input-label">
-            Location
-            {s.jdFilterInfo?.location && s.location === s.jdFilterInfo.location && <span className="slug"> · from requirement</span>}
+            Locations <span className="slug">(any of)</span>
+            {sameAsSuggested && <span className="slug"> · from requirement</span>}
             {s.jdFilterInfo?.work_mode && <span className="slug"> · {s.jdFilterInfo.work_mode}</span>}
           </span>
-          <input className="input-field" maxLength={100} value={s.location} onChange={(e) => s.setLocation(e.target.value)} placeholder={COPY.searchPlaceholders.location} />
+          <TagInput values={s.locations} onChange={s.setLocations} maxItems={10} maxLength={100} itemLabel="location"
+            ariaLabel="Locations" placeholder={COPY.searchPlaceholders.location} />
         </label>
       </div>
 
-      {s.jdFilterInfo && (s.jdFilterInfo.role || s.jdFilterInfo.location) && (
+      {s.jdFilterInfo && (s.jdFilterInfo.role || suggested.length > 0) && (
         <p className="dek search-suggest">
           Suggested:
           {s.jdFilterInfo.role && s.role !== s.jdFilterInfo.role && (
             <button type="button" className="link-btn" onClick={() => s.setRole(s.jdFilterInfo.role)}>Title: {s.jdFilterInfo.role}</button>
           )}
-          {s.jdFilterInfo.location && s.location !== s.jdFilterInfo.location && (
-            <button type="button" className="link-btn" onClick={() => s.setLocation(s.jdFilterInfo.location)}>Location: {s.jdFilterInfo.location}</button>
+          {suggested.length > 0 && !sameAsSuggested && (
+            <button type="button" className="link-btn" onClick={() => s.setLocations(suggested)}>Locations: {suggested.join(', ')}</button>
           )}
         </p>
       )}
@@ -94,11 +97,11 @@ export default function SearchForm({ s }) {
             </span>
           ))}
           {s.role.trim() && <span className="chip" title="Only candidates with this job title">Title: {s.role.trim()}</span>}
-          {s.location.trim() && <span className="chip" title="Only candidates who state this location">Location: {s.location.trim()}</span>}
+          {s.locations.length > 0 && <span className="chip" title="Only candidates who state one of these locations">Locations: {s.locations.join(' or ')}</span>}
           
         </span>
         <span className="cluster cluster-tight">
-          {(s.role.trim() || s.location.trim()) && <button type="button" className="link-btn" onClick={s.clearRoleLocation}>Clear title and location</button>}
+          {(s.role.trim() || s.locations.length > 0) && <button type="button" className="link-btn" onClick={s.clearRoleLocation}>Clear title and location</button>}
           <button type="button" className="btn btn-secondary btn-compact" onClick={s.reset}>Reset</button>
         </span>
       </div>

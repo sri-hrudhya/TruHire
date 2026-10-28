@@ -108,7 +108,7 @@ def test_cancelled_demands_are_not_counted_but_kept(made):
     assert _java_folder(h)["jd_count"] == base + 2
 
 
-def test_client_name_is_optional_editable_clearable_and_one_of_the_known_clients(made):
+def test_client_name_is_optional_editable_clearable_and_known_or_typed(made):
     h, make = made
     jd = make()
     assert jd["client_name"] is None
@@ -121,7 +121,9 @@ def test_client_name_is_optional_editable_clearable_and_one_of_the_known_clients
     # Editing something else leaves the client alone.
     client.put(f"/api/job-descriptions/{jd['id']}", json={"client_name": "Utsuk"}, headers=h)
     assert client.put(f"/api/job-descriptions/{jd['id']}", json={"location": "Pune"}, headers=h).json()["client_name"] == "Utsuk"
-    assert client.put(f"/api/job-descriptions/{jd['id']}", json={"client_name": "Globex"}, headers=h).status_code == 422
+    # "Others": a client outside the list is stored as typed.
+    assert client.put(f"/api/job-descriptions/{jd['id']}", json={"client_name": "  Globex  "}, headers=h).json()["client_name"] == "Globex"
+    assert make(client_name="Initech")["client_name"] == "Initech"
     assert client.get("/api/meta", headers=h).json()["client_names"] == ["Cretera", "Infosys", "Coforge", "Aaseya", "NTT Data", "Utsuk"]
 
 

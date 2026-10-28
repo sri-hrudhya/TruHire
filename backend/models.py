@@ -87,6 +87,8 @@ class Position(Base):
     role = Column(String, nullable=True)
     experience_years = Column(Float, nullable=True)  # minimum years required
     experience_max_years = Column(Float, nullable=True)
+    no_of_positions = Column(Integer, nullable=True)  # how many hires the demand is for; NULL on demands made before this field
+    locations = Column(JSON, nullable=True)  # list of places; `location` below mirrors it as "; "-joined text
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)
     location = Column(String, nullable=True)

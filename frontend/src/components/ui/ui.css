@@ -64,3 +64,9 @@
 .status-mark-strike { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .status-mark-filled .status-mark-ring { stroke: var(--primary); }
 .status-mark-struck { color: var(--text-subtle); }
+
+/* Several values in one field (locations): chips and the typing box share one bordered row. */
+.tag-input { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); cursor: text; }
+.tag-input:focus-within { border-color: var(--primary); }
+.tag-input .chip { padding: 0.2rem 0.3rem 0.2rem 0.6rem; }
+.tag-input input { flex: 1 1 8rem; min-width: 6rem; border: none; background: none; outline: none; padding: 0; font: inherit; color: var(--text-main); }

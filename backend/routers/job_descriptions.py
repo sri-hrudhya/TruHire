@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -31,6 +31,8 @@ router = APIRouter(tags=["job-descriptions"])
 
 MAX_DETAIL_CHARS = 200
 MAX_EXPERIENCE_YEARS = 60
+MAX_LOCATIONS = 10
+MAX_POSITIONS = 10_000
 
 
 def _check_experience_range(low: Optional[float], high: Optional[float]) -> None:
@@ -41,7 +43,9 @@ def _check_experience_range(low: Optional[float], high: Optional[float]) -> None
 class JDDetails(BaseModel):
     """Recruiter-entered JD fields shared by create and update. Blank text means "not stated"."""
     role: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
-    location: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
+    location: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS * MAX_LOCATIONS)  # legacy single value; derived from `locations`
+    locations: Optional[List[str]] = None
+    no_of_positions: Optional[int] = Field(default=None, ge=1, le=MAX_POSITIONS)
     client_name: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     experience_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)  # minimum
     experience_max_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)
@@ -61,20 +65,48 @@ class JDDetails(BaseModel):
             raise ValueError("must be text")
         return value.strip() or None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _single_location_to_list(cls, data):
+        # Older clients send one `location`; it becomes a one-item `locations`.
+        if isinstance(data, dict) and "locations" not in data and "location" in data:
+            return {**data, "locations": [data["location"]] if isinstance(data["location"], str) and data["location"].strip() else []}
+        return data
+
+    @field_validator("locations", mode="before")
+    @classmethod
+    def _clean_locations(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)) or not all(isinstance(v, str) for v in value):
+            raise ValueError("must be a list of places")
+        places: List[str] = []
+        for raw in value:
+            place = " ".join(raw.split())
+            if not place:
+                continue
+            if len(place) > MAX_DETAIL_CHARS:
+                raise ValueError(f"each location is limited to {MAX_DETAIL_CHARS} characters")
+            if place.lower() not in {p.lower() for p in places}:
+                places.append(place)
+        if len(places) > MAX_LOCATIONS:
+            raise ValueError(f"at most {MAX_LOCATIONS} locations")
+        return places
+
     @model_validator(mode="after")
     def _experience_range(self):
         _check_experience_range(self.experience_years, self.experience_max_years)
+        if self.locations is not None:  # keep the joined text in step; assigning also marks `location` as sent
+            self.location = "; ".join(self.locations) or None
         return self
 
     @field_validator("client_name")
     @classmethod
-    def _known_client(cls, value):
+    def _canonical_client(cls, value):
+        # A known client is stored with its canonical spelling; anything else is the typed "Others" name.
         if value is None:
             return None
-        known = next((c for c in CLIENT_NAMES if c.lower() == value.lower()), None)
-        if not known:
-            raise ValueError(f"must be one of: {', '.join(CLIENT_NAMES)}")
-        return known
+        return next((c for c in CLIENT_NAMES if c.lower() == value.lower()), value)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -127,6 +159,8 @@ class PositionResponse(BaseModel):
     status: str = DEFAULT_JD_STATUS
     role: Optional[str] = None
     location: Optional[str] = None
+    locations: List[str] = []
+    no_of_positions: Optional[int] = None
     client_name: Optional[str] = None
     experience_years: Optional[float] = None
     experience_max_years: Optional[float] = None
@@ -139,6 +173,21 @@ class PositionResponse(BaseModel):
     mapped_resumes: List[Dict[str, Any]] = []  # Mapped / Fulfilled demands only: [{id, display_id, candidate_name}]
     created_by_name: Optional[str] = None
     classification_note: Optional[str] = None  # set when the category was uncertain and defaulted to Others
+
+    @field_validator("locations", mode="before")
+    @classmethod
+    def _coerce_locations(cls, v, info: ValidationInfo):
+        if v is not None:
+            return v
+        loc = info.data.get("location") if info.data else None
+        if loc and isinstance(loc, str):
+            return [p.strip() for p in loc.split(";") if p.strip()]
+        return []
+
+    @field_validator("mapped_resumes", mode="before")
+    @classmethod
+    def _coerce_mapped_resumes(cls, v):
+        return v if v is not None else []
 
 
 class RequirementStatusRequest(BaseModel):
@@ -205,7 +254,7 @@ def invalidate_requirements_cache(jd_id: Optional[str] = None):
         clear_cache(f"requirements:matches:{jd_id}")
 
 
-TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "start_date", "end_date", "location", "client_name", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
+TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "no_of_positions", "start_date", "end_date", "location", "client_name", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
 _TEXT_PREVIEW_CHARS = 300
 
 
@@ -316,6 +365,8 @@ def _serialize_position(pos: Position, creator_name: Optional[str] = None, modif
         "status": LEGACY_JD_STATUS_ALIASES.get(pos.status, pos.status) or DEFAULT_JD_STATUS,
         "role": pos.role or derived.get("role"),
         "location": pos.location or derived.get("location"),
+        "locations": pos.locations if pos.locations is not None else [p for p in [pos.location or derived.get("location")] if p],
+        "no_of_positions": pos.no_of_positions,
         "client_name": pos.client_name,
         "updated_at": pos.updated_at.isoformat() if pos.updated_at else None,
         "last_modified_at": (pos.updated_at or pos.created_at).isoformat() if (pos.updated_at or pos.created_at) else None,
@@ -367,7 +418,8 @@ def create_jd(req: PositionCreateRequest, db: Session, user: User) -> Position:
         file_url=_checked_jd_file_url(req.file_url),
         original_filename=req.original_filename,
         status=DEFAULT_JD_STATUS,
-        role=req.role, location=req.location, client_name=req.client_name, experience_years=req.experience_years,
+        role=req.role, location=req.location, locations=req.locations or None, no_of_positions=req.no_of_positions or 1,
+        client_name=req.client_name, experience_years=req.experience_years,
         experience_max_years=req.experience_max_years, start_date=req.start_date, end_date=req.end_date,
     )
     if req.demand_id:
@@ -464,9 +516,14 @@ def update_jd(jd_id: str, req: PositionUpdateRequest, db: Session, user: Optiona
         pos.original_filename = req.original_filename
         changed = True
     # Detail fields: a field the client sent (even as null) is applied, so a value can be cleared.
-    for field in ("role", "location", "client_name", "experience_years", "experience_max_years", "start_date", "end_date"):
-        if field in req.model_fields_set and getattr(req, field) != getattr(pos, field):
-            setattr(pos, field, getattr(req, field))
+    for field in ("role", "location", "locations", "no_of_positions", "client_name", "experience_years", "experience_max_years", "start_date", "end_date"):
+        if field not in req.model_fields_set:
+            continue
+        value = getattr(req, field)
+        if field == "locations":
+            value = value or None  # an empty list clears it
+        if value != getattr(pos, field):
+            setattr(pos, field, value)
             changed = True
     if pos.experience_years is not None and pos.experience_max_years is not None and pos.experience_max_years < pos.experience_years:
         db.rollback()
@@ -625,7 +682,9 @@ def get_jd_search_filters(jd_id: str, db: Session) -> dict:
         stored = {**extract_jd_filters(pos.title, pos.jd_text), "jd_version": pos.jd_version, "title": pos.title, "extractor": JD_FILTER_EXTRACTOR_VERSION}
         pos.search_filters = stored
         db.commit()
-    return {"position_id": pos.id, "jd_version": pos.jd_version, "location": stored.get("location"), "role": stored.get("role"),
+    # The demand's own places win; the JD text's single place is the fallback.
+    locations = pos.locations or [p for p in [stored.get("location")] if p]
+    return {"position_id": pos.id, "jd_version": pos.jd_version, "location": stored.get("location"), "locations": locations, "role": stored.get("role"),
             "work_mode": stored.get("work_mode"), "sources": stored.get("sources") or {}}
 
 

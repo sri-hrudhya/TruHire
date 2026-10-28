@@ -18,7 +18,7 @@ export default function useSearch() {
   const [minExp, setMinExp] = useState('');
   const [jdId, setJdId] = useState('');
   const [categoryId, setCategoryId] = useState('');
-  const [location, setLocation] = useState('');
+  const [locations, setLocations] = useState([]);
   const [role, setRole] = useState('');
   const [jdFilterInfo, setJdFilterInfo] = useState(null);
   const [topN, setTopN] = useState(null);
@@ -51,7 +51,7 @@ export default function useSearch() {
         setChips(state.filter_skills || []);
         setMinExp(state.min_experience ?? '');
         setJdId(state.position_id || '');
-        setLocation(state.location || '');
+        setLocations([]);  // hard filters are never restored (see the search state endpoint)
         setRole(state.role || '');
         setTopN(state.top_n || null);
         // The remembered category only counts while it exists and still contains the restored requirement.
@@ -84,9 +84,9 @@ export default function useSearch() {
     const skills = over.chips ?? chips;
     const jd = over.jdId ?? jdId;
     const category = over.categoryId ?? categoryId;
-    const loc = (over.location ?? location).trim();
+    const locs = over.locations ?? locations;
     const rol = (over.role ?? role).trim();
-    const decision = searchDecision({ categoryId: category, jdId: jd, query, hasSkills: skills.length > 0, hasOtherFilters: !!loc || !!rol });
+    const decision = searchDecision({ categoryId: category, jdId: jd, query, hasSkills: skills.length > 0, hasOtherFilters: locs.length > 0 || !!rol });
     setNotice(null);
     if (decision.action !== 'run') {
       setResults(null);
@@ -101,7 +101,7 @@ export default function useSearch() {
         min_experience: minExp ? parseFloat(minExp) : null,
         position_id: decision.positionId,
         demand_id: decision.demandId,
-        location: loc || null,
+        locations: locs,
         role: rol || null,
         top_n: parseInt(effectiveTopN, 10),
       });
@@ -113,18 +113,20 @@ export default function useSearch() {
     } catch (err) {
       const detail = err?.response?.data?.detail;
       setResults(null);
-      setNotice(typeof detail === 'string' ? detail : 'Search failed. Try again.');
+      setNotice(typeof detail === 'string' ? detail
+        : err?.code === 'ECONNABORTED' ? 'The search is taking longer than expected. Scoring is still slow on this machine; try again, or search with fewer results.'
+        : 'Search failed. Try again.');
     } finally {
       setLoading(false);
     }
-  }, [chips, jdId, categoryId, location, role, query, minExp, effectiveTopN]);
+  }, [chips, jdId, categoryId, locations, role, query, minExp, effectiveTopN]);
 
   const selectJd = async (id) => {
     setJdId(id);
     setJdFilterInfo(null);
     setNotice(null);
     if (!id) {
-      setLocation('');
+      setLocations([]);
       setRole('');
       return;
     }
@@ -132,7 +134,7 @@ export default function useSearch() {
     try { derived = (await jdApi.getSearchFilters(id)).data || null; setJdFilterInfo(derived); } catch (err) { console.error('Could not read location/role from the requirement:', err); }
     // Location / role read from a JD are only suggestions: applied as hard filters they would exclude most candidates.
     const prefill = prefillFromJdFilters(derived);
-    setLocation(prefill.location);
+    setLocations(prefill.locations);
     setRole(prefill.role);
   };
 
@@ -141,7 +143,7 @@ export default function useSearch() {
     if (jdAfterCategoryChange(jds, nextId, jdId) !== jdId) {
       setJdId('');
       setJdFilterInfo(null);
-      setLocation('');
+      setLocations([]);
       setRole('');
       setResults(null);
     }
@@ -151,11 +153,11 @@ export default function useSearch() {
 
   // Edits to the form never search; only the Search button does.
   const removeChip = (chip) => setChips(chips.filter((c) => c !== chip));
-  const clearRoleLocation = () => { setRole(''); setLocation(''); };
+  const clearRoleLocation = () => { setRole(''); setLocations([]); };
 
   const reset = async () => {
     rememberCategory('');
-    setQuery(''); setLocation(''); setRole(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
+    setQuery(''); setLocations([]); setRole(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
     setResults(null); setNotice(null);
     try { await searchApi.clearState(); } catch (err) { console.error('Failed to clear the saved search:', err); }
   };
@@ -178,7 +180,7 @@ export default function useSearch() {
   };
 
   return {
-    query, setQuery, chips, minExp, setMinExp, jdId, categoryId, location, setLocation, role, setRole, jdFilterInfo,
+    query, setQuery, chips, minExp, setMinExp, jdId, categoryId, locations, setLocations, role, setRole, jdFilterInfo,
     topN: effectiveTopN, setTopN, jds, demands, results, loading, notice, exporting,
     run, selectJd, selectCategory, removeChip, clearRoleLocation, reset, setCandidateStatus, exportCandidates,
   };

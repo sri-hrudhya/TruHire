@@ -45,8 +45,9 @@ import { prefillFromJdFilters, emptyResultMessage, resultsViewState } from '../s
 // Picking a JD must not auto-apply hard role/location filters (they would exclude every candidate); they are suggestions.
 assert.deepEqual(
   prefillFromJdFilters({ location: 'Pune, India', role: 'Generative AI Solutions Architect', sources: { role: 'jd_text' } }),
-  { location: '', role: '', suggestedLocation: 'Pune, India', suggestedRole: 'Generative AI Solutions Architect' });
-assert.deepEqual(prefillFromJdFilters(null), { location: '', role: '', suggestedLocation: '', suggestedRole: '' });
+  { locations: [], role: '', suggestedLocations: ['Pune, India'], suggestedRole: 'Generative AI Solutions Architect' });
+assert.deepEqual(prefillFromJdFilters({ locations: ['Pune', 'Mumbai'], location: 'Pune' }).suggestedLocations, ['Pune', 'Mumbai']);
+assert.deepEqual(prefillFromJdFilters(null), { locations: [], role: '', suggestedLocations: [], suggestedRole: '' });
 
 // Backend response with candidates is displayed; an empty one shows the backend's reason.
 const payload = { total_matches: 1, top_n: 20, results: [{ candidate: { id: 'c1', candidate_name: 'Asha' }, match_score: 71.2 }], empty_reason: null };

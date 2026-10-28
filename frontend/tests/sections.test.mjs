@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { changedDetails, clientSummary, filterDemands, sortByStatus, detailsPayload, showRole, formatDate, formatExperience, historyChanges, validateDetails } from '../src/lib/requirements.js';
+import { changedDetails, clientSummary, filterDemands, sortByStatus, detailsPayload, showRole, formatDate, formatExperience, formatLocations, formatPositions, jdLocations, historyChanges, validateDetails } from '../src/lib/requirements.js';
 import { MAX_NOTICE_DAYS, freshness, formatNotice, noticePayload } from '../src/lib/ingestion.js';
 import { explainScore, skillComparison } from '../src/lib/scoreExplanation.js';
 import { FALLBACK_META } from '../src/lib/meta.js';
@@ -24,10 +24,26 @@ run('details validation: experience range and date order', () => {
 });
 
 run('detailsPayload turns blanks into null and trims text', () => {
-  assert.deepEqual(detailsPayload({ role: 'ignored', location: '  Pune ', experience: '', startDate: '', endDate: '', status: 'Open' }),
-    { location: 'Pune', client_name: null, experience_years: null, experience_max_years: null, start_date: null, end_date: null, status: 'Open' });
+  assert.deepEqual(detailsPayload({ role: 'ignored', locations: ['  Pune ', '', 'Mumbai'], experience: '', startDate: '', endDate: '', status: 'Open' }),
+    { locations: ['Pune', 'Mumbai'], no_of_positions: null, client_name: null, experience_years: null, experience_max_years: null, start_date: null, end_date: null, status: 'Open' });
+  assert.equal(detailsPayload({ noOfPositions: '3', status: 'Open' }).no_of_positions, 3);
+  assert.deepEqual(detailsPayload({ locations: [], status: 'Open' }).locations, []);  // an empty list clears the places
   assert.equal(detailsPayload({ experience: '0', status: 'Open' }).experience_years, 0);
   assert.equal(detailsPayload({ experience: '3', experienceMax: '5', status: 'Open' }).experience_max_years, 5);
+});
+
+run('positions and locations: validation and display', () => {
+  assert.equal(validateDetails({ noOfPositions: '2', locations: ['Pune'] }), null);
+  assert.equal(validateDetails({ noOfPositions: '' }), null);
+  for (const bad of ['0', '-1', '1.5', 'abc']) assert.match(validateDetails({ noOfPositions: bad }), /No\. of positions/);
+  assert.match(validateDetails({ locations: Array.from({ length: 11 }, (_, i) => `P${i}`) }), /at most 10/i);
+  assert.deepEqual(jdLocations({ locations: ['Pune', 'Mumbai'], location: 'Pune; Mumbai' }), ['Pune', 'Mumbai']);
+  assert.deepEqual(jdLocations({ location: 'Chennai' }), ['Chennai']);  // a demand saved before several places were allowed
+  assert.deepEqual(jdLocations({}), []);
+  assert.equal(formatLocations({ locations: ['Pune', 'Mumbai'] }), 'Pune, Mumbai');
+  assert.equal(formatLocations({}), '—');
+  assert.equal(formatPositions(4), '4');
+  assert.equal(formatPositions(null), '—');
 });
 
 run('min / max experience: validation and display', () => {
@@ -43,9 +59,10 @@ run('min / max experience: validation and display', () => {
 });
 
 run('changedDetails sends only edited fields', () => {
-  const initial = { location: 'Pune', experience: '3', startDate: '', endDate: '', status: 'Open' };
+  const initial = { locations: ['Pune'], experience: '3', startDate: '', endDate: '', status: 'Open' };
   assert.deepEqual(changedDetails(initial, initial), {});
-  assert.deepEqual(changedDetails(initial, { ...initial, location: '', status: 'Open' }), { location: null });
+  assert.deepEqual(changedDetails(initial, { ...initial, locations: [], status: 'Open' }), { locations: [] });
+  assert.deepEqual(changedDetails(initial, { ...initial, locations: ['Pune', 'Mumbai'] }), { locations: ['Pune', 'Mumbai'] });
 });
 
 run('a status that needs extra data sends it, and only with that status', () => {

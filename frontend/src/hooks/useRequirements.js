@@ -23,6 +23,7 @@ export default function useRequirements() {
   const [demands, setDemands] = useState([]);
   const [selectedJd, setSelectedJd] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [template, setTemplate] = useState(null);  // the demand a new one is being copied from
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(null);
 
@@ -94,11 +95,13 @@ export default function useRequirements() {
     setSearchParams(next, { replace: true });
   };
 
-  const startCreate = () => {
+  // With a demand passed in, the form opens as a copy of it; nothing is saved until the user saves.
+  const startCreate = (source = null) => {
     setCreating(true);
+    setTemplate(source);
     setSelectedJd(null);
     setMatches([]);
-    setNotice(null);
+    setNotice(source ? { type: 'info', message: `Copying ${source.display_id || 'the demand'} “${source.title}”. Change what differs, then save to create a new demand.` } : null);
     const next = new URLSearchParams(searchParams);
     next.delete('id');
     next.delete('view');
@@ -299,7 +302,7 @@ export default function useRequirements() {
   };
 
   return {
-    user, jds, visibleJds, demands, demandId, setDemand, selectedJd, creating, loading, notice, setNotice,
+    user, jds, visibleJds, demands, demandId, setDemand, selectedJd, creating, template, loading, notice, setNotice,
     matches, loadingMatches, minMatchScore, coverage, statusError, assignments, users, retention,
     historyOpen, showHistory, closeJd, changeJdStatus, changeEndDate,
     selectJd, startCreate, loadMatches, changeStatus, assign, saveJd, summarize, removeJd, runRetentionCleanup, openJdFile,

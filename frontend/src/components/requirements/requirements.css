@@ -271,3 +271,22 @@
 .resume-pick .req-empty { padding: var(--space-3); }
 .resume-pick-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); cursor: pointer; }
 .resume-pick-row:hover { background: var(--bg-subtle); }
+
+/* Duplicate sits beside the bin on a demand card */
+.info-card-copy { position: absolute; bottom: var(--space-3); right: calc(var(--space-3) + 2rem); color: var(--text-subtle); }
+.info-card-wrap:not(:hover) .info-card-copy:not(:focus-visible) { opacity: 0.35; }
+.client-other { margin-top: var(--space-2); }
+
+/* List view: a spreadsheet-like grid that scrolls inside its frame, header kept in view */
+.req-table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-surface); }
+.req-table-wrap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.req-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.req-table th, .req-table td { padding: var(--space-2) var(--space-3); border: 1px solid var(--border-color); text-align: left; vertical-align: top; }
+.req-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-subtle); font-weight: 700; color: var(--text-muted); white-space: nowrap; }
+.req-table tbody tr:nth-child(even) { background: var(--bg-subtle); }
+.req-table tbody tr:hover { background: var(--bg-surface-hover, var(--bg-subtle)); }
+.req-table .nowrap { white-space: nowrap; }
+.req-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.req-table-title { min-width: 14rem; max-width: 24rem; }
+.req-table-title .link-btn { text-align: left; }
+.req-table-actions { width: 1%; }

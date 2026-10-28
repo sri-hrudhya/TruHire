@@ -1,22 +1,22 @@
 import { useState } from 'react';
-import { Search, Trash2 } from 'lucide-react';
-import { filterDemands, formatDate, formatExperience, showRole } from '../../lib/requirements';
+import { Copy, Search, Trash2 } from 'lucide-react';
+import { filterDemands, formatDate, formatExperience, formatLocations, formatPositions, showRole } from '../../lib/requirements';
 import JdStatusBadge from './JdStatusBadge';
 import StatusNote from './StatusNote';
 import './requirements.css';
 
 const Fact = ({ label, children }) => <div><dt>{label}</dt><dd>{children}</dd></div>;
 
-// One card per demand of the chosen folder, already in status order. The whole card opens the demand; the bin removes it.
-// The search box filters this folder only, by demand ID or title (partial, any case).
-export default function JdCards({ jds, loading, onOpen, onDelete, onCreate }) {
+// One card per demand of the chosen practice, already in status order. The whole card opens the demand; the copy icon
+// starts a new demand from it and the bin removes it. The search box filters this practice only, by demand ID or title (partial, any case).
+export default function JdCards({ jds, loading, onOpen, onDelete, onDuplicate, onCreate }) {
   const [query, setQuery] = useState('');
   const shown = filterDemands(jds, query);
 
   if (jds.length === 0) {
     return (
       <p className="req-empty">
-        {loading ? 'Loading demands…' : 'No demands in this folder yet.'}
+        {loading ? 'Loading demands…' : 'No demands in this practice yet.'}
         {!loading && <button type="button" className="link-btn" onClick={onCreate}>Create one</button>}
       </p>
     );
@@ -30,8 +30,8 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onCreate }) {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search this folder by demand ID or title"
-          aria-label="Search demands in this folder by ID or title"
+          placeholder="Search this practice by demand ID or title"
+          aria-label="Search demands in this practice by ID or title"
         />
         {query && <span className="slug" role="status">{shown.length} of {jds.length}</span>}
       </div>
@@ -50,10 +50,11 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onCreate }) {
                 <dl className="info-card-rows">
                   <div className="info-card-row">
                     <Fact label="Client">{jd.client_name || '—'}</Fact>
-                    {showRole(jd) ? <Fact label="Role">{jd.role}</Fact> : <Fact label="Location">{jd.location || '—'}</Fact>}
+                    <Fact label="Positions">{formatPositions(jd.no_of_positions)}</Fact>
                   </div>
+                  {showRole(jd) && <div className="info-card-row"><Fact label="Role">{jd.role}</Fact></div>}
                   <div className="info-card-row">
-                    {showRole(jd) && <Fact label="Location">{jd.location || '—'}</Fact>}
+                    <Fact label="Locations">{formatLocations(jd)}</Fact>
                     <Fact label="Experience">{formatExperience(jd.experience_years, jd.experience_max_years)}</Fact>
                   </div>
                   <div className="info-card-row">
@@ -71,6 +72,9 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onCreate }) {
                 </dl>
               </button>
               <span className="info-card-note"><StatusNote jd={jd} /></span>
+              <button type="button" className="icon-btn info-card-copy" onClick={() => onDuplicate(jd)} aria-label={`Duplicate ${jd.title}`} title="Duplicate this demand">
+                <Copy size={14} />
+              </button>
               <button type="button" className="icon-btn info-card-remove" onClick={() => onDelete(jd)} aria-label={`Remove ${jd.title}`}>
                 <Trash2 size={14} />
               </button>

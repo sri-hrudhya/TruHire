@@ -2,7 +2,7 @@
 
 export const COPY = Object.freeze({
   authPlaceholders: { name: 'Full name', email: 'name@company.com' },
-  searchPlaceholders: { role: 'e.g. Backend Engineer', location: 'e.g. Pune' },
+  searchPlaceholders: { role: 'e.g. Backend Engineer', location: 'e.g. Pune, press Enter to add more' },
   emptyResults: 'No candidates matched. Try removing keywords or lowering the minimum experience.',
   nothingToSearch: 'Add a keyword, skill or requirement, then press Search.',
 });

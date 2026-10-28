@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Clock, History } from 'lucide-react';
+import { ChevronRight, Clock, History, LayoutGrid, List } from 'lucide-react';
 import useRequirements from '../hooks/useRequirements';
 import Notice from '../components/ui/Notice';
 import ResumePreviewModal from '../components/ResumePreviewModal';
@@ -7,10 +7,12 @@ import DemandCards from '../components/requirements/DemandCards';
 import JdCards from '../components/requirements/JdCards';
 import JdDetails from '../components/requirements/JdDetails';
 import JdStatusBadge from '../components/requirements/JdStatusBadge';
+import JdTable from '../components/requirements/JdTable';
 import RequirementHistory from '../components/requirements/RequirementHistory';
 import RequirementEditor from '../components/requirements/RequirementEditor';
 import RequirementMatches from '../components/requirements/RequirementMatches';
 import { DeleteRequirementModal, EmailShortlistModal, RetentionModal } from '../components/requirements/RequirementModals';
+import { sortByStatus } from '../lib/requirements';
 import '../components/requirements/requirements.css';
 
 const TABS = (count) => [['details', 'Details'], ['matches', `Candidates (${count})`]];
@@ -24,6 +26,7 @@ export default function JobDescriptionsPage() {
   const [emailing, setEmailing] = useState(false);
   const [showRetention, setShowRetention] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [view, setView] = useState('cards');  // 'cards' or 'list' (spreadsheet-style table)
 
   const jd = r.selectedJd;
   const demand = r.demands.find((d) => d.id === r.demandId);
@@ -32,6 +35,12 @@ export default function JobDescriptionsPage() {
   }));
   const shortlisted = forEmail.filter((c) => c.requirement_status === 'Shortlisted');
   const create = () => { r.startCreate(); setEditing(false); };
+  const duplicate = (source) => { r.startCreate(source); setEditing(false); };
+  const practiceName = (id) => r.demands.find((d) => d.id === id)?.name;
+  const toggleView = () => {
+    if (jd || r.creating) r.closeJd();
+    setView((v) => (v === 'list' ? 'cards' : 'list'));
+  };
   const save = async (payload) => {
     const ok = await r.saveJd(payload);
     if (ok && !r.creating) setEditing(false);
@@ -58,6 +67,11 @@ export default function JobDescriptionsPage() {
               <Clock size={13} aria-hidden="true" /> {r.retention.data_retention_days}-day retention
             </button>
           )}
+          {!r.historyOpen && (
+            <button type="button" className="btn btn-secondary" onClick={toggleView} aria-pressed={view === 'list'}>
+              {view === 'list' ? <><LayoutGrid size={16} /> Card view</> : <><List size={16} /> List view</>}
+            </button>
+          )}
           <button type="button" className={`btn ${r.historyOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={() => r.showHistory(!r.historyOpen)} aria-pressed={r.historyOpen}>
             <History size={16} /> Requirement History
           </button>
@@ -82,8 +96,8 @@ export default function JobDescriptionsPage() {
           <RequirementHistory />
         ) : r.creating ? (
           <>
-            <div className="section-head"><h2>New demand</h2></div>
-            <RequirementEditor key="new" jd={null} creating demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
+            <div className="section-head"><h2>{r.template ? 'Duplicate demand' : 'New demand'}</h2></div>
+            <RequirementEditor key={r.template ? `copy-${r.template.id}` : 'new'} jd={null} creating template={r.template} defaultDemandId={r.demandId} demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
           </>
         ) : jd ? (
           <>
@@ -104,6 +118,7 @@ export default function JobDescriptionsPage() {
                 demandName={r.demands.find((d) => d.id === jd.demand_id)?.name}
                 onStatus={r.changeJdStatus}
                 onEdit={() => setEditing(true)}
+                onDuplicate={() => duplicate(jd)}
                 onEndDate={r.changeEndDate}
                 onOpenFile={() => r.openJdFile(jd.id)}
               />
@@ -129,6 +144,20 @@ export default function JobDescriptionsPage() {
               />
             )}
           </>
+        ) : view === 'list' ? (
+          <>
+            {demand && <div className="section-head"><h2>{demand.name} <span className="slug">{demand.display_id}</span></h2></div>}
+            <JdTable
+              key={demand?.id || 'all'}
+              jds={demand ? r.visibleJds : sortByStatus(r.jds)}
+              loading={r.loading}
+              practiceName={practiceName}
+              onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
+              onDelete={setDeleting}
+              onDuplicate={duplicate}
+              onCreate={create}
+            />
+          </>
         ) : demand ? (
           <>
             <div className="section-head"><h2>{demand.name} <span className="slug">{demand.display_id} · {demand.jd_count} {demand.jd_count === 1 ? 'demand' : 'demands'}{r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}</span></h2></div>
@@ -138,6 +167,7 @@ export default function JobDescriptionsPage() {
               loading={r.loading}
               onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
               onDelete={setDeleting}
+              onDuplicate={duplicate}
               onCreate={create}
             />
           </>

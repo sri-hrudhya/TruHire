@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.models import Candidate, Demand, Position, CandidateMatch
@@ -181,7 +181,7 @@ def _filter_report(db: Session, filters: SearchFilters, excluded_missing: int, e
     if not filters.active:
         return None
     report: Dict[str, Any] = {"location": filters.location, "role": filters.role, "location_key": filters.location_key,
-                              "role_tokens": list(filters.role_tokens),
+                              "location_keys": list(filters.location_keys), "role_tokens": list(filters.role_tokens),
                               "excluded_missing_metadata": excluded_missing, "excluded_mismatch": excluded_mismatch}
     if filters.location_key:
         report["candidates_without_location"] = db.query(Candidate.id).filter(Candidate.location_norm.is_(None)).count()
@@ -216,7 +216,7 @@ def _empty_reason(db: Session, filters: SearchFilters, active_skills: List[str],
     return {"code": "no_match", "message": "No candidates matched. Try different keywords."}
 
 
-def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20, location: Optional[str] = None, role: Optional[str] = None, demand_id: Optional[str] = None) -> Dict[str, Any]:
+def execute_candidate_search(db: Session, query_text: str = "", filter_skills: Optional[List[str]] = None, min_experience: Optional[float] = None, position_id: Optional[str] = None, top_n: int = 20, location: Union[str, List[str], None] = None, role: Optional[str] = None, demand_id: Optional[str] = None) -> Dict[str, Any]:
     """Rank candidates against one requirement (JD). The query text and skill chips only
     narrow / re-rank within that requirement; there is no requirement-less scoring.
 

@@ -31,6 +31,7 @@ class DemandResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
     jd_count: int = 0  # active demands only: Closed and Cancelled ones stay on record but are not counted
+    position_count: int = 0  # sum of no_of_positions over the counted demands (blank counts as 0)
     clients: List[str] = []  # distinct client names of the counted demands, alphabetical
     unassigned_client_count: int = 0  # counted demands with no client name
     is_default: bool = False
@@ -82,7 +83,8 @@ def _client_summary(positions) -> dict:
             names.setdefault(name.lower(), name)  # one entry per client, whatever its casing
         else:
             missing += 1
-    return {"clients": sorted(names.values(), key=str.lower), "unassigned_client_count": missing}
+    return {"clients": sorted(names.values(), key=str.lower), "unassigned_client_count": missing,
+            "position_count": sum(p.no_of_positions or 0 for p in positions)}
 
 
 def _serialize(demand: Demand, jd_count: int, creator_name: Optional[str] = None, clients: Optional[dict] = None) -> dict:

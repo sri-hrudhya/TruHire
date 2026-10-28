@@ -1,6 +1,10 @@
 // Pure helpers for the Requirements section (folder cards, demand cards, demand form, history log).
 
 export const MAX_EXPERIENCE_YEARS = 60;
+export const MAX_LOCATIONS = 10;
+export const MAX_POSITIONS = 10000;
+// The client dropdown's last choice: the recruiter types the name.
+export const OTHER_CLIENT = '__other__';
 export const MAX_CANCELLATION_REASON = 1000;
 
 // A date-only value ("2026-11-01") shows as the same calendar day in every timezone.
@@ -33,6 +37,11 @@ export function formatExperience(min, max) {
   return '—';
 }
 
+// A demand's places as a list; demands saved before several places were allowed carry one `location` text.
+export const jdLocations = (jd) => (Array.isArray(jd?.locations) && jd.locations.length ? jd.locations : jd?.location ? [jd.location] : []);
+export const formatLocations = (jd) => jdLocations(jd).join(', ') || '—';
+export const formatPositions = (n) => (n === null || n === undefined || n === '' ? '—' : String(n));
+
 // The role is only worth showing when it says something the title does not.
 const squash = (v) => (v || '').toLowerCase().replace(/\s+/g, ' ').trim();
 export const showRole = (jd) => !!squash(jd?.role) && squash(jd.role) !== squash(jd.title);
@@ -43,13 +52,14 @@ export const RESUME_LINKED = ['Mapped', 'Fulfilled'];
 
 // Form values -> API payload. Blank means "not stated" (null), so clearing a field is expressible.
 // The reason / resume ids are only sent with the status that needs them.
-export function detailsPayload({ demandId, location, clientName, experience, experienceMax, startDate, endDate, status, cancellationReason, candidateIds }) {
+export function detailsPayload({ demandId, locations, clientName, experience, experienceMax, noOfPositions, startDate, endDate, status, cancellationReason, candidateIds }) {
   const text = (v) => (v || '').trim() || null;
   return {
     ...(status === CANCELLED ? { cancellation_reason: text(cancellationReason) } : {}),
     ...(RESUME_LINKED.includes(status) ? { candidate_ids: candidateIds || [] } : {}),
     ...(demandId ? { demand_id: demandId } : {}),
-    location: text(location),
+    locations: (locations || []).map((p) => (p || '').trim()).filter(Boolean),
+    no_of_positions: blank(noOfPositions) ? null : Number(noOfPositions),
     client_name: text(clientName),
     experience_years: blank(experience) ? null : Number(experience),
     experience_max_years: blank(experienceMax) ? null : Number(experienceMax),
@@ -60,7 +70,12 @@ export function detailsPayload({ demandId, location, clientName, experience, exp
 }
 
 // Error message for unacceptable form values, or null.
-export function validateDetails({ experience, experienceMax, startDate, endDate }) {
+export function validateDetails({ experience, experienceMax, noOfPositions, locations, startDate, endDate }) {
+  if ((locations || []).length > MAX_LOCATIONS) return `Add at most ${MAX_LOCATIONS} locations.`;
+  if (!blank(noOfPositions)) {
+    const n = Number(noOfPositions);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_POSITIONS) return `No. of positions must be a whole number from 1 to ${MAX_POSITIONS}.`;
+  }
   for (const [label, value] of [['Min experience', experience], ['Max experience', experienceMax]]) {
     if (blank(value)) continue;
     const n = Number(value);
@@ -84,8 +99,8 @@ export const HISTORY_ACTION_LABELS = Object.freeze({
 });
 
 const FIELD_LABELS = {
-  title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Min experience (yrs)', experience_max_years: 'Max experience (yrs)', start_date: 'Start date',
-  end_date: 'End date', location: 'Location', client_name: 'Client', status: 'Demand status', demand: 'Folder', reason: 'Reason',
+  title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Min experience (yrs)', experience_max_years: 'Max experience (yrs)', no_of_positions: 'No. of positions', start_date: 'Start date',
+  end_date: 'End date', location: 'Location', client_name: 'Client', status: 'Demand status', demand: 'Practice', reason: 'Reason',
   cancellation_reason: 'Cancellation reason', mapped_resumes: 'Resumes',
 };
 const show = (v) => (v === null || v === undefined || v === '' ? 'empty' : String(v));

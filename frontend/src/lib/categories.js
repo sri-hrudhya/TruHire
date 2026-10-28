@@ -41,13 +41,14 @@ export function searchDecision({ categoryId, jdId, query, hasSkills = false, has
   return { action: 'run', mode: 'keyword', ...none };
 }
 
-// Location / role read from a JD are suggestions, never applied automatically: as hard filters they
+// Location(s) / role read from a JD are suggestions, never applied automatically: as hard filters they
 // exclude every candidate whose stated titles/location don't repeat them (a JD for "Generative AI
 // Solutions Architect" matches nobody holding that exact title), so picking a JD would return zero.
 // The recruiter opts in by applying a suggestion.
 export function prefillFromJdFilters(info) {
   const data = info || {};
-  return { location: '', role: '', suggestedLocation: data.location || '', suggestedRole: data.role || '' };
+  const places = Array.isArray(data.locations) && data.locations.length ? data.locations : data.location ? [data.location] : [];
+  return { locations: [], role: '', suggestedLocations: places, suggestedRole: data.role || '' };
 }
 
 // Message for a search that returned nobody: the backend's specific reason when it gave one.

@@ -81,6 +81,32 @@ def test_update_rejects_end_before_existing_start_and_keeps_data(ctx):
     assert _listed(client, headers, jd["id"])["end_date"] is None
 
 
+def test_several_locations_and_number_of_positions(ctx):
+    client, headers, db, user, created = ctx
+    jd = _create(client, headers, created, locations=["Pune", " Mumbai ", "pune"], no_of_positions=4)
+    assert jd["locations"] == ["Pune", "Mumbai"] and jd["location"] == "Pune; Mumbai" and jd["no_of_positions"] == 4
+    listed = _listed(client, headers, jd["id"])
+    assert listed["locations"] == ["Pune", "Mumbai"] and listed["no_of_positions"] == 4
+    # Omitting the count on create means one position; locations can be replaced, cleared and recorded in history.
+    plain = _create(client, headers, created)
+    assert plain["no_of_positions"] == 1 and plain["locations"] == []
+    res = client.put(f"/api/job-descriptions/{jd['id']}", json={"locations": ["Chennai"], "no_of_positions": 2}, headers=headers)
+    assert res.json()["locations"] == ["Chennai"] and res.json()["location"] == "Chennai" and res.json()["no_of_positions"] == 2
+    assert client.put(f"/api/job-descriptions/{jd['id']}", json={"locations": []}, headers=headers).json()["locations"] == []
+    changes = [r["changes"] for r in _history(client, headers, jd["id"]) if r["action"] == "updated"]
+    assert any("no_of_positions" in c for c in changes) and any("location" in c for c in changes)
+
+
+def test_single_location_clients_still_work_and_bad_values_are_rejected(ctx):
+    client, headers, db, user, created = ctx
+    jd = _create(client, headers, created, location="Pune")  # the older single-value field
+    assert jd["locations"] == ["Pune"] and jd["location"] == "Pune"
+    assert client.put(f"/api/job-descriptions/{jd['id']}", json={"location": "Mumbai"}, headers=headers).json()["locations"] == ["Mumbai"]
+    for bad in ({"no_of_positions": 0}, {"no_of_positions": -2}, {"locations": ["x"] * 11}, {"locations": "Pune"}, {"locations": [1]}):
+        res = client.post("/api/job-descriptions", json={"title": "X", "jd_text": "Java developer", **bad}, headers=headers)
+        assert res.status_code == 422, bad
+
+
 def test_chosen_folder_is_kept_and_can_be_changed_on_edit(ctx):
     from backend.models import canonical_demand_id
     client, headers, db, user, created = ctx

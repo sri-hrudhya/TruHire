@@ -1,36 +1,46 @@
 import { useRef, useState } from 'react';
 import { FileCheck, Loader2, Save, Sparkles, UploadCloud } from 'lucide-react';
 import { jdApi } from '../../lib/api';
-import { changedDetails, detailsPayload, validateDetails } from '../../lib/requirements';
+import { changedDetails, detailsPayload, jdLocations, MAX_LOCATIONS, OTHER_CLIENT, validateDetails } from '../../lib/requirements';
 import { useMeta } from '../../context/MetaContext';
+import TagInput from '../ui/TagInput';
 import StatusSelect from './StatusSelect';
 import './requirements.css';
 
 // Create or edit one requirement: title, specification text and an optional source file (text is extracted).
 // Detail fields as form strings; the same shape is used to detect what the user actually changed.
-const initialDetails = (jd, creating, defaultStatus) => ({
-  demandId: creating ? '' : jd?.demand_id || '',
-  location: creating ? '' : jd?.location || '',
-  clientName: creating ? '' : jd?.client_name || '',
-  experience: creating || jd?.experience_years == null ? '' : String(jd.experience_years),
-  experienceMax: creating || jd?.experience_max_years == null ? '' : String(jd.experience_max_years),
-  startDate: creating ? '' : jd?.start_date || '',
-  endDate: creating ? '' : jd?.end_date || '',
-  status: creating ? defaultStatus : jd?.status || defaultStatus,
-  cancellationReason: creating ? '' : jd?.cancellation_reason || '',
-  candidateIds: creating ? [] : (jd?.mapped_resumes || []).map((r) => r.id),
-});
+// A copy (`template`) starts from the copied demand's details but is always a fresh Open demand.
+// A new demand started inside a practice folder defaults to that practice; from the landing grid it stays unselected.
+const initialDetails = (jd, creating, defaultStatus, template, defaultDemandId) => {
+  const src = creating ? template : jd;
+  return {
+    demandId: src?.demand_id || (creating && defaultDemandId) || '',
+    locations: jdLocations(src),
+    clientName: src?.client_name || '',
+    experience: src?.experience_years == null ? '' : String(src.experience_years),
+    experienceMax: src?.experience_max_years == null ? '' : String(src.experience_max_years),
+    noOfPositions: creating && !template ? '1' : src?.no_of_positions == null ? '' : String(src.no_of_positions),
+    startDate: src?.start_date || '',
+    endDate: src?.end_date || '',
+    status: creating ? defaultStatus : jd?.status || defaultStatus,
+    cancellationReason: creating ? '' : jd?.cancellation_reason || '',
+    candidateIds: creating ? [] : (jd?.mapped_resumes || []).map((r) => r.id),
+  };
+};
 
-export default function RequirementEditor({ jd, creating, demands = [], onSave, onSummarize, onNotice, onCancel }) {
+export default function RequirementEditor({ jd, creating, template = null, defaultDemandId = null, demands = [], onSave, onSummarize, onNotice, onCancel }) {
   const { accepted_jd_file_types: acceptedTypes, client_names: clientNames, default_jd_status: defaultStatus } = useMeta();
-  const [initial] = useState(() => initialDetails(jd, creating, defaultStatus));
+  const [initial] = useState(() => initialDetails(jd, creating, defaultStatus, template, defaultDemandId));
   const [details, setDetails] = useState(initial);
+  // A client outside the dropdown list is an "Others" client: the name is typed.
+  const [otherClient, setOtherClient] = useState(() => !!initial.clientName && !clientNames.includes(initial.clientName));
   const [pickedResumes, setPickedResumes] = useState(() => (creating ? [] : jd?.mapped_resumes || []));
   const [formError, setFormError] = useState(null);
   const setField = (key) => (e) => setDetails((d) => ({ ...d, [key]: e.target.value }));
   const fileRef = useRef(null);
-  const [title, setTitle] = useState(creating ? '' : jd?.title || '');
-  const [text, setText] = useState(creating ? '' : jd?.jd_text || '');
+  const [title, setTitle] = useState(creating ? (template ? `${template.title} (Copy)` : '') : jd?.title || '');
+  const [text, setText] = useState(creating ? template?.jd_text || '' : jd?.jd_text || '');
+  // A copy starts without the source file; the specification text is what carries over.
   const [fileUrl, setFileUrl] = useState(creating ? null : jd?.file_url || null);
   const [originalFilename, setOriginalFilename] = useState(creating ? null : jd?.original_filename || null);
   const [extracting, setExtracting] = useState(false);
@@ -44,7 +54,7 @@ export default function RequirementEditor({ jd, creating, demands = [], onSave, 
     setDetails((d) => ({
       ...d,
       demandId: d.demandId || (demands.some((x) => x.id === found.suggested_demand_id) ? found.suggested_demand_id : ''),
-      location: d.location.trim() ? d.location : found.location || '',
+      locations: d.locations.length ? d.locations : found.location ? [found.location] : [],
       experience: d.experience !== '' ? d.experience : found.experience_years == null ? '' : String(found.experience_years),
     }));
   };
@@ -93,7 +103,9 @@ export default function RequirementEditor({ jd, creating, demands = [], onSave, 
   const submit = async (e) => {
     e.preventDefault();
     if (!title.trim() || !text.trim()) return;
-    const problem = !details.demandId ? 'Choose a demand folder.' : validateDetails(details);
+    const problem = !details.demandId ? 'Choose a demand practice.'
+      : otherClient && !details.clientName.trim() ? 'Enter the client name, or pick a client from the list.'
+      : validateDetails(details);
     setFormError(problem);
     if (problem) return;
     setSaving(true);
@@ -150,19 +162,28 @@ export default function RequirementEditor({ jd, creating, demands = [], onSave, 
 
       <div className="detail-form">
         <div>
-          <label className="input-label" htmlFor="req-folder">Demand Folder</label>
+          <label className="input-label" htmlFor="req-folder">Demand Practice</label>
           <select id="req-folder" className="input-field" required value={details.demandId} onChange={setField('demandId')}>
-            <option value="">Select a folder</option>
+            <option value="">Select a practice</option>
             {demands.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
         <div>
           <label className="input-label" htmlFor="req-client">Client Name <span className="slug">(optional)</span></label>
-          <select id="req-client" className="input-field" value={details.clientName} onChange={setField('clientName')}>
+          <select id="req-client" className="input-field" value={otherClient ? OTHER_CLIENT : details.clientName}
+            onChange={(e) => {
+              const picked = e.target.value;
+              setOtherClient(picked === OTHER_CLIENT);
+              setDetails((d) => ({ ...d, clientName: picked === OTHER_CLIENT ? '' : picked }));
+            }}>
             <option value="">Select a client</option>
             {clientNames.map((name) => <option key={name} value={name}>{name}</option>)}
-            {details.clientName && !clientNames.includes(details.clientName) && <option value={details.clientName}>{details.clientName}</option>}
+            <option value={OTHER_CLIENT}>Others</option>
           </select>
+          {otherClient && (
+            <input className="input-field client-other" maxLength={200} value={details.clientName} onChange={setField('clientName')}
+              placeholder="Type the client name" aria-label="Client name" autoFocus={!details.clientName} />
+          )}
         </div>
         <div>
           <label className="input-label" htmlFor="req-exp">Min Experience (years)</label>
@@ -173,8 +194,13 @@ export default function RequirementEditor({ jd, creating, demands = [], onSave, 
           <input id="req-exp-max" className="input-field" type="number" min="0" step="0.5" value={details.experienceMax} onChange={setField('experienceMax')} />
         </div>
         <div>
-          <label className="input-label" htmlFor="req-location">Location</label>
-          <input id="req-location" className="input-field" maxLength={200} value={details.location} onChange={setField('location')} />
+          <label className="input-label" htmlFor="req-location">Locations <span className="slug">(up to {MAX_LOCATIONS})</span></label>
+          <TagInput id="req-location" values={details.locations} maxItems={MAX_LOCATIONS} maxLength={200} itemLabel="location"
+            onChange={(locations) => setDetails((d) => ({ ...d, locations }))} placeholder="Type a place, press Enter" />
+        </div>
+        <div>
+          <label className="input-label" htmlFor="req-positions">No. of Positions</label>
+          <input id="req-positions" className="input-field" type="number" min="1" step="1" required value={details.noOfPositions} onChange={setField('noOfPositions')} />
         </div>
         <div>
           <label className="input-label" htmlFor="req-status">Demand Status</label>

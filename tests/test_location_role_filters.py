@@ -110,6 +110,21 @@ def test_index_query_fragments():
     assert F.qdrant_filter(F.NO_FILTERS) is None and F.opensearch_filters(F.NO_FILTERS) == []
 
 
+def test_several_locations_match_any_and_share_one_cache_key_regardless_of_order():
+    f = F.build_filters(["Pune", "Bangalore", "pune"], None)
+    assert f.location_keys == ("pune", "bengaluru") and f.location_key == "pune" and f.location == "Pune, Bangalore, pune"
+    assert F.candidate_matches("Bengaluru, India", [], f) and F.candidate_matches("Pune", [], f)
+    assert not F.candidate_matches("Mumbai", [], f) and not F.candidate_matches(None, [], f)
+    assert F.qdrant_filter(f) == {"must": [{"key": "location_keys", "match": {"any": ["pune", "bengaluru"]}}]}
+    assert F.opensearch_filters(f) == [{"terms": {"location_keys": ["pune", "bengaluru"]}}]
+    assert f.cache_part() == F.build_filters(["Bengaluru", "Pune"], None).cache_part()
+    assert F.build_filters([], None).active is False and F.build_filters([" ", ""], None).active is False
+    with pytest.raises(F.InvalidFilter):
+        F.build_filters(["Pune", "!!!"], None)
+    with pytest.raises(F.InvalidFilter):
+        F.build_filters([f"City{i}" for i in range(F.MAX_LOCATION_FILTERS + 1)], None)
+
+
 def test_index_payload_fields_only_contain_stated_facts():
     assert F.index_payload_fields(None, None) == {"location": "", "location_keys": [], "job_titles": [], "role_tokens": []}
     p = F.index_payload_fields("Pune, India", ["Senior Backend Developer", "QA Analyst"])
