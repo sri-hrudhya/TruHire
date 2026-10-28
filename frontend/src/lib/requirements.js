@@ -1,6 +1,7 @@
-// Pure helpers for the Requirements section (demand cards, JD cards, JD form, history log).
+// Pure helpers for the Requirements section (folder cards, demand cards, demand form, history log).
 
 export const MAX_EXPERIENCE_YEARS = 60;
+export const MAX_CANCELLATION_REASON = 1000;
 
 // A date-only value ("2026-11-01") shows as the same calendar day in every timezone.
 export function formatDate(value) {
@@ -27,11 +28,19 @@ export function formatExperience(years) {
 const squash = (v) => (v || '').toLowerCase().replace(/\s+/g, ' ').trim();
 export const showRole = (jd) => !!squash(jd?.role) && squash(jd.role) !== squash(jd.title);
 
+// Statuses that carry extra data: a Cancelled demand its reason, a Mapped / Fulfilled one its resumes.
+export const CANCELLED = 'Cancelled';
+export const RESUME_LINKED = ['Mapped', 'Fulfilled'];
+
 // Form values -> API payload. Blank means "not stated" (null), so clearing a field is expressible.
-export function detailsPayload({ location, experience, startDate, endDate, status }) {
+// The reason / resume ids are only sent with the status that needs them.
+export function detailsPayload({ location, clientName, experience, startDate, endDate, status, cancellationReason, candidateIds }) {
   const text = (v) => (v || '').trim() || null;
   return {
+    ...(status === CANCELLED ? { cancellation_reason: text(cancellationReason) } : {}),
+    ...(RESUME_LINKED.includes(status) ? { candidate_ids: candidateIds || [] } : {}),
     location: text(location),
+    client_name: text(clientName),
     experience_years: experience === '' || experience === null || experience === undefined ? null : Number(experience),
     start_date: startDate || null,
     end_date: endDate || null,
@@ -53,7 +62,8 @@ export function validateDetails({ experience, startDate, endDate }) {
 export function changedDetails(initial, current) {
   const next = detailsPayload(current);
   const was = detailsPayload(initial);
-  return Object.fromEntries(Object.entries(next).filter(([k, v]) => v !== was[k]));
+  const same = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
+  return Object.fromEntries(Object.entries(next).filter(([k, v]) => !same(v, was[k])));
 }
 
 export const HISTORY_ACTION_LABELS = Object.freeze({
@@ -62,7 +72,8 @@ export const HISTORY_ACTION_LABELS = Object.freeze({
 
 const FIELD_LABELS = {
   title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Experience (yrs)', start_date: 'Start date',
-  end_date: 'End date', location: 'Location', status: 'JD status', demand: 'Demand', reason: 'Reason',
+  end_date: 'End date', location: 'Location', client_name: 'Client', status: 'Demand status', demand: 'Folder', reason: 'Reason',
+  cancellation_reason: 'Cancellation reason', mapped_resumes: 'Resumes',
 };
 const show = (v) => (v === null || v === undefined || v === '' ? 'empty' : String(v));
 
@@ -76,4 +87,33 @@ export function historyChanges(entry) {
       to: entry.action === 'deleted' ? null : show(v.new),
     };
   });
+}
+
+// Folder order: open demands first, then mapped and fulfilled (still live work), then cancelled.
+// Newest first within a status; the sort is stable, so ties keep API order.
+const STATUS_RANK = { Open: 0, Mapped: 1, Map: 1, Fulfilled: 2, Cancelled: 4 };
+export const statusRank = (status) => STATUS_RANK[status || 'Open'] ?? 2;
+export function sortByStatus(items) {
+  const time = (j) => Date.parse(j.created_at) || 0;
+  return [...items].sort((a, b) => statusRank(a.status) - statusRank(b.status) || time(b) - time(a));
+}
+
+// Partial, case-insensitive match on the demand ID or title. IDs also match without punctuation ("jd 12", "jd12").
+const squashId = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+export function filterDemands(items, query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return items;
+  const qId = squashId(q);
+  return items.filter((j) => (j.title || '').toLowerCase().includes(q)
+    || (j.display_id || '').toLowerCase().includes(q)
+    || (qId && squashId(j.display_id).includes(qId)));
+}
+
+// Client line for a folder card: up to two names, then "+N more"; "No client" when none is stated.
+export function clientSummary(clients, unassigned = 0) {
+  const names = clients || [];
+  if (names.length === 0) return 'No client';
+  const shown = names.slice(0, 2).join(', ');
+  const more = names.length > 2 ? ` +${names.length - 2} more` : '';
+  return `${shown}${more}${unassigned > 0 ? ` (+${unassigned} unassigned)` : ''}`;
 }

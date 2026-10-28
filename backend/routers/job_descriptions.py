@@ -12,7 +12,7 @@ from backend.database import get_db
 from backend.models import (
     Position, User, DEFAULT_DEMAND_NAMES, canonical_demand_id, demand_display_id, Candidate, CandidateMatch, SearchState, Conversation, EmailRecord,
     CandidateAssignment, CandidateComment, RequirementCandidateStatus, REQUIREMENT_STATUSES, DEFAULT_REQUIREMENT_STATUS, get_next_position_display_id,
-    JD_STATUSES, DEFAULT_JD_STATUS, HISTORY_ACTIONS, HISTORY_CREATED, HISTORY_UPDATED, HISTORY_DELETED, HISTORY_STATUS_CHANGED, RequirementHistory,
+    JD_STATUSES, LEGACY_JD_STATUS_ALIASES, DEFAULT_JD_STATUS, CLIENT_NAMES, RESUME_LINKED_JD_STATUSES, MAX_CANCELLATION_REASON_CHARS, HISTORY_ACTIONS, HISTORY_CREATED, HISTORY_UPDATED, HISTORY_DELETED, HISTORY_STATUS_CHANGED, RequirementHistory,
 )
 from backend.auth import get_current_user
 from backend.config import settings
@@ -37,12 +37,16 @@ class JDDetails(BaseModel):
     """Recruiter-entered JD fields shared by create and update. Blank text means "not stated"."""
     role: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     location: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
+    client_name: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     experience_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: Optional[str] = None
+    # Companion data of a status: why a demand was Cancelled, which resumes a Mapped / Fulfilled one was filled with.
+    cancellation_reason: Optional[str] = Field(default=None, max_length=MAX_CANCELLATION_REASON_CHARS)
+    candidate_ids: Optional[List[str]] = None
 
-    @field_validator("role", "location", mode="before")
+    @field_validator("role", "location", "client_name", "cancellation_reason", mode="before")
     @classmethod
     def _blank_is_none(cls, value):
         if value is None:
@@ -50,6 +54,21 @@ class JDDetails(BaseModel):
         if not isinstance(value, str):
             raise ValueError("must be text")
         return value.strip() or None
+
+    @field_validator("client_name")
+    @classmethod
+    def _known_client(cls, value):
+        if value is None:
+            return None
+        known = next((c for c in CLIENT_NAMES if c.lower() == value.lower()), None)
+        if not known:
+            raise ValueError(f"must be one of: {', '.join(CLIENT_NAMES)}")
+        return known
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _alias_status(cls, value):
+        return LEGACY_JD_STATUS_ALIASES.get(value, value)
 
     @field_validator("status")
     @classmethod
@@ -96,9 +115,15 @@ class PositionResponse(BaseModel):
     status: str = DEFAULT_JD_STATUS
     role: Optional[str] = None
     location: Optional[str] = None
+    client_name: Optional[str] = None
     experience_years: Optional[float] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    updated_at: Optional[datetime] = None
+    last_modified_at: Optional[datetime] = None  # updated_at, or the creation time for a demand never edited
+    last_modified_by: Optional[str] = None  # name of whoever last changed it, or the creator for a demand never edited
+    cancellation_reason: Optional[str] = None  # Cancelled demands only
+    mapped_resumes: List[Dict[str, Any]] = []  # Mapped / Fulfilled demands only: [{id, display_id, candidate_name}]
     created_by_name: Optional[str] = None
     classification_note: Optional[str] = None  # set when the category was uncertain and defaulted to Others
 
@@ -109,6 +134,8 @@ class RequirementStatusRequest(BaseModel):
 
 class JDStatusRequest(BaseModel):
     status: str
+    cancellation_reason: Optional[str] = Field(default=None, max_length=MAX_CANCELLATION_REASON_CHARS)
+    candidate_ids: Optional[List[str]] = None
 
 
 class PositionDemandRequest(BaseModel):
@@ -157,7 +184,7 @@ def invalidate_requirements_cache(jd_id: Optional[str] = None):
         clear_cache(f"requirements:matches:{jd_id}")
 
 
-TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "start_date", "end_date", "location", "status", "demand_id")
+TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "start_date", "end_date", "location", "client_name", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
 _TEXT_PREVIEW_CHARS = 300
 
 
@@ -173,16 +200,28 @@ def _clip(text: Optional[str]) -> Optional[str]:
 
 def _snapshot(pos: Position) -> dict:
     snap = history.snapshot(pos, TRACKED_FIELDS)
-    snap["status"] = snap["status"] or DEFAULT_JD_STATUS
+    snap["status"] = LEGACY_JD_STATUS_ALIASES.get(snap["status"], snap["status"]) or DEFAULT_JD_STATUS
+    snap["mapped_candidate_ids"] = ",".join(sorted(pos.mapped_candidate_ids or [])) or None
     return snap
 
 
-def _readable(changes: dict) -> dict:
+def _resume_labels(db: Optional[Session], joined: Optional[str]) -> Optional[str]:
+    """'TRU-CN-0001 Asha Rao, TRU-CN-0002 …' for the history log from a comma-joined id list."""
+    ids = [i for i in (joined or "").split(",") if i]
+    if not ids or db is None:
+        return joined
+    found = {c.id: c for c in db.query(Candidate).filter(Candidate.id.in_(ids)).all()}
+    return ", ".join(f"{found[i].display_id} {found[i].candidate_name}" if i in found else i for i in ids)
+
+
+def _readable(changes: dict, db: Optional[Session] = None) -> dict:
     """History view of a diff: demand shown by name instead of id, long specification text shortened."""
     out = {}
     for field, delta in changes.items():
         if field == "demand_id":
             out["demand"] = {"old": _demand_name(delta["old"]), "new": _demand_name(delta["new"])}
+        elif field == "mapped_candidate_ids":
+            out["mapped_resumes"] = {"old": _resume_labels(db, delta["old"]), "new": _resume_labels(db, delta["new"])}
         elif field == "jd_text":
             out[field] = {"old": _clip(delta["old"]), "new": _clip(delta["new"])}
         else:
@@ -220,7 +259,18 @@ def _detect_details(title: str, jd_text: str) -> dict:
     return out
 
 
-def _serialize_position(pos: Position, creator_name: Optional[str] = None) -> dict:
+def _is_status(pos: Position, *statuses: str) -> bool:
+    return (LEGACY_JD_STATUS_ALIASES.get(pos.status, pos.status) or DEFAULT_JD_STATUS) in statuses
+
+
+def _mapped_resumes(ids: Optional[List[str]], candidates: Dict[str, Candidate]) -> List[dict]:
+    """Resumes a demand was filled with; ones deleted since then are skipped rather than failing the page."""
+    return [{"id": c.id, "display_id": c.display_id, "candidate_name": c.candidate_name}
+            for c in (candidates.get(i) for i in ids or []) if c]
+
+
+def _serialize_position(pos: Position, creator_name: Optional[str] = None, modifier_name: Optional[str] = None,
+                        candidates: Optional[Dict[str, Candidate]] = None) -> dict:
     # JDs created before these fields existed fall back to what the JD itself states (already
     # extracted and cached in search_filters; no model call here), so older cards are not blank.
     derived = pos.search_filters or {}
@@ -238,9 +288,15 @@ def _serialize_position(pos: Position, creator_name: Optional[str] = None) -> di
         "file_url": pos.file_url,
         "original_filename": pos.original_filename,
         "demand_id": pos.demand_id,
-        "status": pos.status or DEFAULT_JD_STATUS,
+        "status": LEGACY_JD_STATUS_ALIASES.get(pos.status, pos.status) or DEFAULT_JD_STATUS,
         "role": pos.role or derived.get("role"),
         "location": pos.location or derived.get("location"),
+        "client_name": pos.client_name,
+        "updated_at": pos.updated_at.isoformat() if pos.updated_at else None,
+        "last_modified_at": (pos.updated_at or pos.created_at).isoformat() if (pos.updated_at or pos.created_at) else None,
+        "last_modified_by": modifier_name or creator_name,
+        "cancellation_reason": pos.cancellation_reason if _is_status(pos, "Cancelled") else None,
+        "mapped_resumes": _mapped_resumes(pos.mapped_candidate_ids, candidates or {}) if _is_status(pos, *RESUME_LINKED_JD_STATUSES) else [],
         "experience_years": experience,
         "start_date": pos.start_date.isoformat() if pos.start_date else None,
         "end_date": pos.end_date.isoformat() if pos.end_date else None,
@@ -254,7 +310,9 @@ def list_jds(db: Session):
         return cached
     positions = db.query(Position).order_by(Position.created_at.desc()).all()
     names = dict(db.query(User.id, User.name).all())
-    data = [_serialize_position(p, names.get(p.created_by)) for p in positions]
+    wanted = {i for p in positions for i in p.mapped_candidate_ids or []}
+    candidates = {c.id: c for c in db.query(Candidate).filter(Candidate.id.in_(wanted)).all()} if wanted else {}
+    data = [_serialize_position(p, names.get(p.created_by), names.get(p.updated_by), candidates) for p in positions]
     set_cache(cache_key, data, ttl_seconds=settings.CACHE_TTL_QUERY)
     return data
 
@@ -282,28 +340,73 @@ def create_jd(req: PositionCreateRequest, db: Session, user: User) -> Position:
         created_at=datetime.utcnow(),
         file_url=_checked_jd_file_url(req.file_url),
         original_filename=req.original_filename,
-        status=req.status or DEFAULT_JD_STATUS,
-        role=req.role, location=req.location, experience_years=req.experience_years,
+        status=DEFAULT_JD_STATUS,
+        role=req.role, location=req.location, client_name=req.client_name, experience_years=req.experience_years,
         start_date=req.start_date, end_date=req.end_date,
     )
     _classify_position(pos)
     db.add(pos)
     db.flush()
+    if req.status and req.status != DEFAULT_JD_STATUS:
+        _apply_status(db, pos, req.status, req.cancellation_reason, req.candidate_ids)
     stated = {k: v for k, v in _snapshot(pos).items() if v is not None}
     history.record(db, HISTORY_CREATED, pos, user, _readable(history.diff({}, stated)))
     db.commit()
     db.refresh(pos)
     invalidate_requirements_cache()
-    return _with_creator(pos, user.name)
+    return _with_creator(pos, user.name, db)
 
 
-def _with_creator(pos: Position, name: Optional[str]) -> Position:
-    pos.created_by_name = name  # transient: only the response carries it
+def _with_creator(pos: Position, name: Optional[str], db: Optional[Session] = None) -> Position:
+    # Transient attributes: only the response carries them.
+    pos.created_by_name = name
+    pos.last_modified_at = pos.updated_at or pos.created_at
+    pos.last_modified_by = (db.query(User.name).filter(User.id == pos.updated_by).scalar() if db and pos.updated_by else None) or name
+    candidates = {c.id: c for c in db.query(Candidate).filter(Candidate.id.in_(pos.mapped_candidate_ids)).all()} if db and pos.mapped_candidate_ids else {}
+    pos.mapped_resumes = _mapped_resumes(pos.mapped_candidate_ids, candidates) if _is_status(pos, *RESUME_LINKED_JD_STATUSES) else []
     return pos
 
 
 def _creator_name(pos: Position, db: Session) -> Optional[str]:
     return db.query(User.name).filter(User.id == pos.created_by).scalar()
+
+
+def _touch(pos: Position, user: Optional[User]) -> None:
+    """Stamp a save: when, and by whom (kept as is when the caller is unknown)."""
+    pos.updated_at = datetime.utcnow()
+    if user is not None:
+        pos.updated_by = user.id
+
+
+def _apply_status(db: Session, pos: Position, status: str, reason: Optional[str], candidate_ids: Optional[List[str]]) -> bool:
+    """Set the status together with the data it needs; True if anything changed.
+
+    Cancelled needs a reason; Mapped and Fulfilled need at least one existing resume. A status
+    that is kept (e.g. Mapped -> Fulfilled) reuses what is already stored when nothing new is sent.
+    Moving to any other status clears the companion data, so a reason or resume list never outlives its status.
+    """
+    current = _snapshot(pos)["status"]
+    if status == current and not reason and candidate_ids is None:
+        return False  # same status, nothing new sent: leave what is stored (older rows may have no reason / resumes)
+    new_reason, new_ids = None, None
+    if status == "Cancelled":
+        new_reason = (reason or "").strip() or (pos.cancellation_reason if current == "Cancelled" else None)
+        if not new_reason:
+            raise HTTPException(422, "A cancellation reason is required.")
+    elif status in RESUME_LINKED_JD_STATUSES:
+        if candidate_ids is not None:
+            ids = list(dict.fromkeys(candidate_ids))
+        else:
+            ids = list(pos.mapped_candidate_ids or []) if current in RESUME_LINKED_JD_STATUSES else []
+        if not ids:
+            raise HTTPException(422, f"Select at least one resume for a {status} demand.")
+        found = {i for (i,) in db.query(Candidate.id).filter(Candidate.id.in_(ids)).all()}
+        if len(found) != len(ids):
+            raise HTTPException(422, "One or more selected resumes no longer exist.")
+        new_ids = ids
+    changed = (current, pos.cancellation_reason, pos.mapped_candidate_ids or None) != (status, new_reason, new_ids)
+    pos.status, pos.cancellation_reason, pos.mapped_candidate_ids = status, new_reason, new_ids
+    return changed
 
 
 def get_jd(jd_id: str, db: Session) -> Position:
@@ -333,12 +436,11 @@ def update_jd(jd_id: str, req: PositionUpdateRequest, db: Session, user: Optiona
         pos.original_filename = req.original_filename
         changed = True
     # Detail fields: a field the client sent (even as null) is applied, so a value can be cleared.
-    for field in ("role", "location", "experience_years", "start_date", "end_date"):
+    for field in ("role", "location", "client_name", "experience_years", "start_date", "end_date"):
         if field in req.model_fields_set and getattr(req, field) != getattr(pos, field):
             setattr(pos, field, getattr(req, field))
             changed = True
-    if req.status is not None and req.status != (pos.status or DEFAULT_JD_STATUS):
-        pos.status = req.status
+    if req.status is not None and _apply_status(db, pos, req.status, req.cancellation_reason, req.candidate_ids):
         changed = True
     if pos.start_date and pos.end_date and pos.end_date < pos.start_date:
         db.rollback()
@@ -348,38 +450,41 @@ def update_jd(jd_id: str, req: PositionUpdateRequest, db: Session, user: Optiona
         _classify_position(pos)  # content edits re-categorise; there is no sticky manual override
         note = pos.classification_note
     if changed:
-        pos.updated_at = datetime.utcnow()
+        _touch(pos, user)
         _record_changes(db, pos, before, user)
         db.commit()
         db.refresh(pos)
         pos.classification_note = note
         invalidate_requirements_cache(pos.id)
-    return _with_creator(pos, _creator_name(pos, db))
+    return _with_creator(pos, _creator_name(pos, db), db)
 
 
 def _record_changes(db: Session, pos: Position, before: dict, user: Optional[User]) -> None:
     """One 'status_changed' entry for a status change and one 'updated' entry for everything else."""
-    changes = _readable(history.diff(before, _snapshot(pos)))
+    changes = _readable(history.diff(before, _snapshot(pos)), db)
     status = changes.pop("status", None)
     if status:
-        history.record(db, HISTORY_STATUS_CHANGED, pos, user, {"status": status})
+        # The reason / resumes a status came with belong to that status change.
+        companions = {k: changes.pop(k) for k in ("cancellation_reason", "mapped_resumes") if k in changes}
+        history.record(db, HISTORY_STATUS_CHANGED, pos, user, {"status": status, **companions})
     if changes:
         history.record(db, HISTORY_UPDATED, pos, user, changes)
 
 
-def set_jd_status(jd_id: str, status: str, db: Session, user: User) -> Position:
+def set_jd_status(jd_id: str, status: str, db: Session, user: User, reason: Optional[str] = None,
+                  candidate_ids: Optional[List[str]] = None) -> Position:
+    status = LEGACY_JD_STATUS_ALIASES.get(status, status)
     if status not in JD_STATUSES:
         raise HTTPException(400, f"Invalid status. Use one of: {', '.join(JD_STATUSES)}.")
     pos = get_jd(jd_id, db)
-    if (pos.status or DEFAULT_JD_STATUS) != status:
-        before = _snapshot(pos)
-        pos.status = status
-        pos.updated_at = datetime.utcnow()
+    before = _snapshot(pos)
+    if _apply_status(db, pos, status, (reason or "").strip() or None, candidate_ids):
+        _touch(pos, user)
         _record_changes(db, pos, before, user)
         db.commit()
         db.refresh(pos)
         invalidate_requirements_cache(pos.id)
-    return _with_creator(pos, _creator_name(pos, db))
+    return _with_creator(pos, _creator_name(pos, db), db)
 
 
 def set_jd_demand(jd_id: str, demand_id: Optional[str], db: Session, user: Optional[User] = None) -> Position:
@@ -396,13 +501,13 @@ def set_jd_demand(jd_id: str, demand_id: Optional[str], db: Session, user: Optio
     if pos.demand_id != target:
         before = _snapshot(pos)
         pos.demand_id = target
-        pos.updated_at = datetime.utcnow()
+        _touch(pos, user)
         _record_changes(db, pos, before, user)
         db.commit()
         db.refresh(pos)
         delete_cache("requirements:list")
         delete_cache(f"requirements:detail:{pos.id}")
-    return _with_creator(pos, _creator_name(pos, db))
+    return _with_creator(pos, _creator_name(pos, db), db)
 
 
 def delete_jd(jd_id: str, db: Session, user: Optional[User] = None) -> dict:
@@ -678,7 +783,8 @@ def extract_job_description_details(req: JDDetailsRequest, user: User = Depends(
 
 @router.get("/api/job-descriptions/{id}", response_model=PositionResponse)
 def get_job_description(id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return get_jd(id, db)
+    pos = get_jd(id, db)
+    return _with_creator(pos, _creator_name(pos, db), db)
 
 
 @router.get("/api/job-descriptions/{id}/search-filters")
@@ -712,7 +818,7 @@ def put_job_description_demand(id: str, req: PositionDemandRequest, db: Session 
 
 @router.put("/api/job-descriptions/{id}/status", response_model=PositionResponse)
 def put_job_description_status(id: str, req: JDStatusRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return set_jd_status(id, req.status, db, user)
+    return set_jd_status(id, req.status, db, user, req.cancellation_reason, req.candidate_ids)
 
 
 @router.get("/api/requirement-history")

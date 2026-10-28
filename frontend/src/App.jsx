@@ -24,9 +24,10 @@ const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
 function readSidebarPref() {
   try {
-    return localStorage.getItem(SIDEBAR_PREF_KEY) === '1';
+    const stored = localStorage.getItem(SIDEBAR_PREF_KEY);
+    return stored === null ? isMobile() : stored === '1';  // phones start with the narrow icon rail
   } catch {
-    return false;
+    return isMobile();
   }
 }
 
@@ -34,10 +35,8 @@ function readSidebarPref() {
 function ProtectedLayout() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
-  // Desktop: collapsed (icons only) vs expanded; remembered across navigation and reloads.
+  // Collapsed (icons only) vs expanded; remembered across navigation and reloads. The arrow under the logo is the only control.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarPref);
-  // Small screens: the sidebar is an off-canvas drawer.
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -47,22 +46,7 @@ function ProtectedLayout() {
     }
   }, [sidebarCollapsed]);
 
-  // Close the mobile drawer after any navigation (link click, browser Back/Forward).
-  useEffect(() => {
-    setMobileNavOpen(false);
-  }, [location.pathname]);
-
-  useEffect(() => {
-    if (!mobileNavOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') setMobileNavOpen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [mobileNavOpen]);
-
   const toggleSidebar = useCallback(() => setSidebarCollapsed((c) => !c), []);
-  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
-  // One menu button: it opens the drawer on small screens and collapses the sidebar on larger ones.
-  const toggleMenu = useCallback(() => (isMobile() ? setMobileNavOpen((o) => !o) : toggleSidebar()), [toggleSidebar]);
 
   if (loading) {
     return (
@@ -79,10 +63,9 @@ function ProtectedLayout() {
 
   return (
     <div className="app-container">
-      <Navbar onToggleMenu={toggleMenu} menuOpen={isMobile() ? mobileNavOpen : !sidebarCollapsed} />
+      <Navbar />
       <div className="app-body">
-        <Sidebar collapsed={sidebarCollapsed} mobileOpen={mobileNavOpen} />
-        {mobileNavOpen && <div className="sidebar-backdrop" onClick={closeMobileNav} aria-hidden="true" />}
+        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
         <div className="main-content">
           <Outlet />
         </div>

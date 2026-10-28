@@ -56,8 +56,8 @@ export default function ResultRow({ item, onStatus, onPreview }) {
             <SkillGroup title="Resume skills" skills={skills.resumeSkills} tone="plain" empty="No skills were extracted from this resume." />
             {skills.hasJdSkills ? (
               <>
-                <SkillGroup title="Matched JD skills" skills={skills.matched} tone="hit" empty="None of the requirement's skills were found." />
-                <SkillGroup title="Missing required JD skills" skills={skills.missing} tone="miss" empty="Every required skill was found." />
+                <SkillGroup title="Matched demand skills" skills={skills.matched} tone="hit" empty="None of the requirement's skills were found." />
+                <SkillGroup title="Missing required demand skills" skills={skills.missing} tone="miss" empty="Every required skill was found." />
               </>
             ) : (
               <p className="slug">Pick a requirement to compare this resume with its required skills.</p>

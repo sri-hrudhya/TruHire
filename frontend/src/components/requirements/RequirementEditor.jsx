@@ -3,22 +3,27 @@ import { FileCheck, Loader2, Save, Sparkles, UploadCloud } from 'lucide-react';
 import { jdApi } from '../../lib/api';
 import { changedDetails, detailsPayload, validateDetails } from '../../lib/requirements';
 import { useMeta } from '../../context/MetaContext';
+import StatusSelect from './StatusSelect';
 import './requirements.css';
 
 // Create or edit one requirement: title, specification text and an optional source file (text is extracted).
 // Detail fields as form strings; the same shape is used to detect what the user actually changed.
 const initialDetails = (jd, creating, defaultStatus) => ({
   location: creating ? '' : jd?.location || '',
+  clientName: creating ? '' : jd?.client_name || '',
   experience: creating || jd?.experience_years == null ? '' : String(jd.experience_years),
   startDate: creating ? '' : jd?.start_date || '',
   endDate: creating ? '' : jd?.end_date || '',
   status: creating ? defaultStatus : jd?.status || defaultStatus,
+  cancellationReason: creating ? '' : jd?.cancellation_reason || '',
+  candidateIds: creating ? [] : (jd?.mapped_resumes || []).map((r) => r.id),
 });
 
 export default function RequirementEditor({ jd, creating, onSave, onSummarize, onNotice, onCancel }) {
-  const { accepted_jd_file_types: acceptedTypes, jd_statuses: statuses, default_jd_status: defaultStatus } = useMeta();
+  const { accepted_jd_file_types: acceptedTypes, client_names: clientNames, default_jd_status: defaultStatus } = useMeta();
   const [initial] = useState(() => initialDetails(jd, creating, defaultStatus));
   const [details, setDetails] = useState(initial);
+  const [pickedResumes, setPickedResumes] = useState(() => (creating ? [] : jd?.mapped_resumes || []));
   const [formError, setFormError] = useState(null);
   const setField = (key) => (e) => setDetails((d) => ({ ...d, [key]: e.target.value }));
   const fileRef = useRef(null);
@@ -122,7 +127,7 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
         ) : (
           <span className="cluster cluster-tight">
             <UploadCloud size={16} aria-hidden="true" />
-            <span>Drop a requirement file here, or</span>
+            <span>Drop a demand file here, or</span>
             <button type="button" className="btn btn-secondary btn-compact" onClick={() => fileRef.current?.click()}>Choose file</button>
           </span>
         )}
@@ -142,6 +147,14 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
 
       <div className="detail-form">
         <div>
+          <label className="input-label" htmlFor="req-client">Client Name <span className="slug">(optional)</span></label>
+          <select id="req-client" className="input-field" value={details.clientName} onChange={setField('clientName')}>
+            <option value="">Select a client</option>
+            {clientNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            {details.clientName && !clientNames.includes(details.clientName) && <option value={details.clientName}>{details.clientName}</option>}
+          </select>
+        </div>
+        <div>
           <label className="input-label" htmlFor="req-exp">Experience (years)</label>
           <input id="req-exp" className="input-field" type="number" step="0.5" value={details.experience} onChange={setField('experience')} />
         </div>
@@ -150,18 +163,24 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
           <input id="req-location" className="input-field" maxLength={200} value={details.location} onChange={setField('location')} />
         </div>
         <div>
-          <label className="input-label" htmlFor="req-status">JD Status</label>
-          <select id="req-status" className="input-field" value={details.status} onChange={setField('status')}>
-            {statuses.map((st) => <option key={st} value={st}>{st}</option>)}
-          </select>
+          <label className="input-label" htmlFor="req-status">Demand Status</label>
+          <StatusSelect id="req-status" value={details.status} reason={details.cancellationReason} resumes={pickedResumes}
+            onChange={async (status, extras, picked) => {
+              setDetails((d) => ({ ...d, status, cancellationReason: extras.cancellation_reason ?? '', candidateIds: extras.candidate_ids ?? [] }));
+              setPickedResumes(picked);
+              return null;
+            }} />
         </div>
         <div>
           <label className="input-label" htmlFor="req-start">Start Date</label>
           <input id="req-start" className="input-field" type="date" value={details.startDate} onChange={setField('startDate')} />
         </div>
         <div>
-          <label className="input-label" htmlFor="req-end">End Date</label>
-          <input id="req-end" className="input-field" type="date" value={details.endDate} onChange={setField('endDate')} />
+          <label className="input-label" htmlFor="req-end">End Date <span className="slug">(tentative)</span></label>
+          <span className="cluster cluster-tight">
+            <input id="req-end" className="input-field" type="date" value={details.endDate} onChange={setField('endDate')} />
+            {details.endDate && <button type="button" className="link-btn" onClick={() => setDetails((d) => ({ ...d, endDate: '' }))}>Clear</button>}
+          </span>
         </div>
       </div>
       {formError && <p className="req-error" role="alert">{formError}</p>}
@@ -185,7 +204,7 @@ export default function RequirementEditor({ jd, creating, onSave, onSummarize, o
           )}
           {onCancel && <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>}
           <button type="submit" className="btn btn-primary" disabled={saving || extracting}>
-            <Save size={15} /> {saving ? 'Saving…' : creating ? 'Create requirement' : 'Save changes'}
+            <Save size={15} /> {saving ? 'Saving…' : creating ? 'Create demand' : 'Save changes'}
           </button>
         </span>
       </div>

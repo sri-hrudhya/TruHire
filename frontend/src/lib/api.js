@@ -65,7 +65,8 @@ export const jdApi = {
   delete: (id) => api.delete(`/job-descriptions/${id}`),
   // Scoring a requirement can take a while on a cold start (model loading), so allow more than the default.
   getMatches: (id, top_n = 50) => api.get(`/job-descriptions/${id}/matches?top_n=${top_n}`, { timeout: TIMEOUTS_MS.scoring }),
-  setStatus: (id, status) => api.put(`/job-descriptions/${id}/status`, { status }),
+  // extras: { cancellation_reason } for Cancelled, { candidate_ids } for Mapped / Fulfilled.
+  setStatus: (id, status, extras = {}) => api.put(`/job-descriptions/${id}/status`, { status, ...extras }),
   setCandidateStatus: (id, candidateId, status) => api.put(`/job-descriptions/${id}/candidates/${candidateId}/status`, { status }),
   summarize: (id) => api.post(`/job-descriptions/${id}/summarize`),
   // Location / role / work mode read from the JD (null where the JD does not state them).

@@ -33,7 +33,7 @@ export default function AnalyticsPage() {
         const jdsRes = await jdApi.list();
         setJds(jdsRes.data);
       } catch (err) {
-        console.error('Failed to load JDs for analytics:', err);
+        console.error('Failed to load demands for analytics:', err);
       }
       loadAnalytics();
     };

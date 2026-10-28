@@ -1,27 +1,17 @@
 import React from 'react';
-import { Menu, Moon, Sun } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import Logo from './Logo';
 import AccountMenu from './AccountMenu';
 
-// Fixed top bar shown on every page: menu button and logo on the left, theme switch and account on the right.
-export default function Navbar({ onToggleMenu, menuOpen = false }) {
+// Fixed top bar shown on every page: logo on the left (the collapse arrow sits under it in the sidebar), theme switch and account on the right.
+export default function Navbar() {
   const { theme, toggleTheme } = useTheme();
   const next = theme === 'dark' ? 'light' : 'dark';
 
   return (
     <header className="navbar">
       <div className="navbar-left">
-        <button
-          type="button"
-          onClick={onToggleMenu}
-          className="icon-btn menu-btn"
-          aria-label="Toggle navigation"
-          aria-controls="app-sidebar"
-          aria-expanded={menuOpen}
-        >
-          <Menu size={22} />
-        </button>
         <Logo />
       </div>
       <div className="navbar-right">

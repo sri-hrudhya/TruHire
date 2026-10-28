@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { changedDetails, detailsPayload, showRole, formatDate, formatExperience, historyChanges, validateDetails } from '../src/lib/requirements.js';
+import { changedDetails, clientSummary, filterDemands, sortByStatus, detailsPayload, showRole, formatDate, formatExperience, historyChanges, validateDetails } from '../src/lib/requirements.js';
 import { MAX_NOTICE_DAYS, freshness, formatNotice, noticePayload } from '../src/lib/ingestion.js';
 import { explainScore, skillComparison } from '../src/lib/scoreExplanation.js';
 import { FALLBACK_META } from '../src/lib/meta.js';
@@ -7,8 +7,10 @@ import { FALLBACK_META } from '../src/lib/meta.js';
 const run = (name, fn) => { try { fn(); console.log(`PASS ${name}`); } catch (e) { console.error(`FAIL ${name}\n`, e); process.exitCode = 1; } };
 const DAY = 86_400_000;
 
-run('JD statuses are exactly Open, Closed, Cancelled, Fulfilled, Map', () => {
-  assert.deepEqual(FALLBACK_META.jd_statuses, ['Open', 'Closed', 'Cancelled', 'Fulfilled', 'Map']);
+run('JD statuses are exactly Open, Cancelled, Fulfilled, Mapped (no Closed)', () => {
+  assert.deepEqual(FALLBACK_META.jd_statuses, ['Open', 'Cancelled', 'Fulfilled', 'Mapped']);
+  assert.deepEqual(FALLBACK_META.resume_linked_jd_statuses, ['Mapped', 'Fulfilled']);
+  assert.deepEqual(FALLBACK_META.client_names, ['Cretera', 'Infosys', 'Coforge', 'Aaseya', 'NTT Data', 'Utsuk']);
   assert.equal(FALLBACK_META.default_jd_status, 'Open');
 });
 
@@ -23,14 +25,26 @@ run('details validation: experience range and date order', () => {
 
 run('detailsPayload turns blanks into null and trims text', () => {
   assert.deepEqual(detailsPayload({ role: 'ignored', location: '  Pune ', experience: '', startDate: '', endDate: '', status: 'Open' }),
-    { location: 'Pune', experience_years: null, start_date: null, end_date: null, status: 'Open' });
+    { location: 'Pune', client_name: null, experience_years: null, start_date: null, end_date: null, status: 'Open' });
   assert.equal(detailsPayload({ experience: '0', status: 'Open' }).experience_years, 0);
 });
 
 run('changedDetails sends only edited fields', () => {
   const initial = { location: 'Pune', experience: '3', startDate: '', endDate: '', status: 'Open' };
   assert.deepEqual(changedDetails(initial, initial), {});
-  assert.deepEqual(changedDetails(initial, { ...initial, location: '', status: 'Closed' }), { location: null, status: 'Closed' });
+  assert.deepEqual(changedDetails(initial, { ...initial, location: '', status: 'Open' }), { location: null });
+});
+
+run('a status that needs extra data sends it, and only with that status', () => {
+  const initial = { status: 'Open' };
+  assert.deepEqual(changedDetails(initial, { ...initial, status: 'Cancelled', cancellationReason: '  Budget cut ' }), { status: 'Cancelled', cancellation_reason: 'Budget cut' });
+  assert.deepEqual(changedDetails(initial, { ...initial, status: 'Mapped', candidateIds: ['a', 'b'] }), { status: 'Mapped', candidate_ids: ['a', 'b'] });
+  assert.equal('candidate_ids' in detailsPayload({ status: 'Open', candidateIds: ['a'] }), false);
+  assert.equal('cancellation_reason' in detailsPayload({ status: 'Mapped', cancellationReason: 'x' }), false);
+  // Untouched Mapped demand: nothing to send.
+  const mapped = { status: 'Mapped', candidateIds: ['a', 'b'] };
+  assert.deepEqual(changedDetails(mapped, { ...mapped, candidateIds: ['a', 'b'] }), {});
+  assert.deepEqual(changedDetails(mapped, { ...mapped, candidateIds: ['a'] }), { candidate_ids: ['a'] });
 });
 
 run('date-only values keep their calendar day; missing values show a dash', () => {
@@ -94,4 +108,36 @@ run('skill comparison exposes matched and missing JD skills', () => {
   const c = skillComparison(['Java', 'SQL'], { matched_skills: ['Java'], missing_skills: ['Camunda'] });
   assert.deepEqual([c.matched, c.missing, c.hasJdSkills], [['Java'], ['Camunda'], true]);
   assert.equal(skillComparison(['Java'], {}).hasJdSkills, false);
+});
+
+run('client name is optional, trimmed, and clearable', () => {
+  assert.equal(detailsPayload({ clientName: '  Acme  ', status: 'Open' }).client_name, 'Acme');
+  assert.equal(detailsPayload({ clientName: '   ', status: 'Open' }).client_name, null);
+  const initial = { clientName: 'Acme', status: 'Open' };
+  assert.deepEqual(changedDetails(initial, { ...initial, clientName: '' }), { client_name: null });
+});
+
+run('demands sort Open -> Mapped -> Fulfilled -> Cancelled, newest first within a status', () => {
+  const d = (id, status, created_at) => ({ id, status, created_at });
+  const sorted = sortByStatus([
+    d('x', 'Cancelled', '2026-03-01'), d('a', 'Fulfilled', '2026-03-02'), d('b', 'Open', '2026-01-01'),
+    d('c', 'Open', '2026-02-01'), d('e', undefined, '2026-01-15'), d('f', 'Mapped', '2026-01-01'),
+  ]);
+  assert.deepEqual(sorted.map((j) => j.id), ['c', 'e', 'b', 'f', 'a', 'x']);
+});
+
+run('folder search matches partial ID or title, ignoring case and punctuation', () => {
+  const jds = [{ display_id: 'TRU-JD-0012', title: 'Senior Java Developer' }, { display_id: 'TRU-JD-0013', title: 'Pega Lead' }];
+  assert.equal(filterDemands(jds, '').length, 2);
+  assert.deepEqual(filterDemands(jds, 'java').map((j) => j.display_id), ['TRU-JD-0012']);
+  assert.deepEqual(filterDemands(jds, '0013').map((j) => j.display_id), ['TRU-JD-0013']);
+  assert.deepEqual(filterDemands(jds, 'jd 0012').map((j) => j.display_id), ['TRU-JD-0012']);
+  assert.equal(filterDemands(jds, 'zzz').length, 0);
+});
+
+run('client summary handles none, one, several and partly missing', () => {
+  assert.equal(clientSummary([], 3), 'No client');
+  assert.equal(clientSummary(['Acme']), 'Acme');
+  assert.equal(clientSummary(['Acme', 'Globex', 'Initech', 'Umbrella']), 'Acme, Globex +2 more');
+  assert.equal(clientSummary(['Acme'], 2), 'Acme (+2 unassigned)');
 });

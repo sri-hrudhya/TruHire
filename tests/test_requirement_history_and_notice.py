@@ -111,9 +111,10 @@ def test_noop_save_and_same_status_log_nothing(ctx):
 def test_status_change_through_update_is_logged_and_clearing_a_field_works(ctx):
     client, headers, db, user, created = ctx
     jd = _create(client, headers, created, role="Lead")
-    client.put(f"/api/job-descriptions/{jd['id']}", json={"status": "Closed", "role": None}, headers=headers)
+    client.put(f"/api/job-descriptions/{jd['id']}", json={"status": "Cancelled", "cancellation_reason": "On hold", "role": None}, headers=headers)
     acts = {r["action"]: r for r in _history(client, headers, jd["id"])}
-    assert acts["status_changed"]["changes"]["status"]["new"] == "Closed"
+    assert acts["status_changed"]["changes"]["status"]["new"] == "Cancelled"
+    assert acts["status_changed"]["changes"]["cancellation_reason"]["new"] == "On hold"
     assert acts["updated"]["changes"]["role"] == {"old": "Lead", "new": None}
 
 
@@ -137,7 +138,7 @@ def test_demands_expose_id_and_creator(ctx):
 def test_meta_lists_only_the_five_jd_statuses(ctx):
     client, headers, *_ = ctx
     meta = client.get("/api/meta", headers=headers).json()
-    assert meta["jd_statuses"] == ["Open", "Closed", "Cancelled", "Fulfilled", "Map"]
+    assert meta["jd_statuses"] == ["Open", "Cancelled", "Fulfilled", "Mapped"]
     assert meta["notice_period_units"] == ["Days", "Weeks", "Months"]
 
 

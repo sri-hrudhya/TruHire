@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Clock, History, Plus } from 'lucide-react';
+import { ChevronRight, Clock, History } from 'lucide-react';
 import useRequirements from '../hooks/useRequirements';
 import Notice from '../components/ui/Notice';
 import ResumePreviewModal from '../components/ResumePreviewModal';
@@ -15,7 +15,7 @@ import '../components/requirements/requirements.css';
 
 const TABS = (count) => [['details', 'Details'], ['matches', `Candidates (${count})`]];
 
-// Progressive disclosure: five demand cards -> that demand's JD cards -> one JD's full details.
+// Progressive disclosure: five folder cards -> that folder's demand cards -> one demand's full details.
 export default function JobDescriptionsPage() {
   const r = useRequirements();
   const [tab, setTab] = useState('details');
@@ -38,11 +38,11 @@ export default function JobDescriptionsPage() {
     return ok;
   };
 
-  const crumbs = [{ label: 'Demands', onClick: () => r.setDemand(null) }];
+  const crumbs = [{ label: 'Requirements', onClick: () => r.setDemand(null) }];
   if (r.historyOpen) crumbs.push({ label: 'Requirement History' });
   else {
     if (demand) crumbs.push({ label: demand.name, onClick: jd || r.creating ? () => r.setDemand(demand.id) : undefined });
-    if (r.creating) crumbs.push({ label: 'New requirement' });
+    if (r.creating) crumbs.push({ label: 'New demand' });
     else if (jd) crumbs.push({ label: jd.title });
   }
 
@@ -82,7 +82,7 @@ export default function JobDescriptionsPage() {
           <RequirementHistory />
         ) : r.creating ? (
           <>
-            <div className="section-head"><h2>New requirement</h2></div>
+            <div className="section-head"><h2>New demand</h2></div>
             <RequirementEditor key="new" jd={null} creating onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
           </>
         ) : jd ? (
@@ -104,6 +104,7 @@ export default function JobDescriptionsPage() {
                 demandName={r.demands.find((d) => d.id === jd.demand_id)?.name}
                 onStatus={r.changeJdStatus}
                 onEdit={() => setEditing(true)}
+                onEndDate={r.changeEndDate}
                 onOpenFile={() => r.openJdFile(jd.id)}
               />
             )}
@@ -130,8 +131,9 @@ export default function JobDescriptionsPage() {
           </>
         ) : demand ? (
           <>
-            <div className="section-head"><h2>{demand.name} <span className="slug">{demand.display_id} · {r.visibleJds.length} {r.visibleJds.length === 1 ? 'JD' : 'JDs'}</span></h2></div>
+            <div className="section-head"><h2>{demand.name} <span className="slug">{demand.display_id} · {demand.jd_count} {demand.jd_count === 1 ? 'demand' : 'demands'}{r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}</span></h2></div>
             <JdCards
+              key={demand.id}
               jds={r.visibleJds}
               loading={r.loading}
               onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
@@ -140,19 +142,7 @@ export default function JobDescriptionsPage() {
             />
           </>
         ) : (
-          <div className="stack stack-loose">
-            <button type="button" className="new-req-card" onClick={create}>
-              <span className="new-req-icon" aria-hidden="true"><Plus size={22} /></span>
-              <span className="new-req-text">
-                <span className="new-req-title">New Requirement</span>
-                <span className="new-req-hint">Upload a JD file or write one. It is filed under Java, GenAI, Camunda, Pega or Others automatically.</span>
-              </span>
-            </button>
-            <div>
-              <h2 className="landing-heading">Demands</h2>
-              <DemandCards demands={r.demands} loading={r.loading} onOpen={r.setDemand} />
-            </div>
-          </div>
+          <DemandCards demands={r.demands} loading={r.loading} onOpen={r.setDemand} onCreate={create} />
         )}
       </section>
 

@@ -3,11 +3,11 @@
 Mode: Operate. Recruiters and admins work in it for hours, so scanning speed beats expression. The world supplies type, palette, density and one signature move; layout and controls stay standard web components.
 
 ## World
-Requirements are stories on a desk, candidates are wire items, recruiters take assignments. Cool newsprint-grey ground, ink-black type, one wire-teal action colour.
+Requirements are stories on a desk, candidates are wire items, recruiters take assignments. Cool newsprint-grey ground, ink-black type, one logo-blue action colour.
 
 ## Tokens (source of truth: `src/styles/tokens.css`)
 - Ground `--bg-app #eef0ee`, sheet `--bg-surface #f8f9f7`, ink `--text-main #15191c`.
-- Action `--primary #0b6e5c` (light) / `#3fb89f` (dark). It appears only where something can be done or is selected.
+- Action `--primary #3a4aa0` (light) / `#8ea2dc` (dark). It appears only where something can be done or is selected.
 - State colours (`--success`, `--warning`, `--danger`, `--info`) are used only where they carry meaning.
 - Radii 3 / 5 / 8px. No card shadows: structure is hairline rules; shadow is reserved for things that float (modals).
 - Space is a 4px scale (`--space-1` to `--space-7`); body measure is 68ch.

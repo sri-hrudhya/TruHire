@@ -6,7 +6,7 @@ import './requirements.css';
 
 const PAGE = 50;
 
-// Persistent log of JD creations, updates, status changes and deletions, newest first.
+// Persistent log of demand creations, updates, status changes and deletions, newest first.
 export default function RequirementHistory() {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -64,7 +64,7 @@ export default function RequirementHistory() {
               </div>
               <p className="slug history-meta">
                 {entry.demand_display_id && <span>Demand ID: <strong>{entry.demand_display_id}</strong>{entry.demand_name ? ` · ${entry.demand_name}` : ''}</span>}
-                {entry.item_display_id && <span>JD ID: <strong>{entry.item_display_id}</strong></span>}
+                {entry.item_display_id && <span>Demand ID: <strong>{entry.item_display_id}</strong></span>}
                 <span>By {entry.user_name || 'System'}</span>
               </p>
               {changes.length > 0 && (

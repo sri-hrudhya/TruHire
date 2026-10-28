@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import CANDIDATE_STATUSES, NOTICE_PERIOD_UNITS, Candidate, CandidateAssignment, CandidateComment, CandidateMatch, Position, RequirementCandidateStatus, User
@@ -75,16 +76,20 @@ def _serialize_candidate(c: Candidate) -> Dict[str, Any]:
 
 
 @router.get("", response_model=dict)
-def list_candidates(limit: int = 20, offset: int = 0, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     bounded = max(1, min(limit, 100))
-    cache_key = f"candidates:list:{bounded}:{offset}"
+    needle = (q or "").strip()[:100]
+    cache_key = f"candidates:list:{bounded}:{offset}:{needle.lower()}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
 
-    q = db.query(Candidate).order_by(Candidate.uploaded_at.desc())
-    total = q.count()
-    rows = q.offset(offset).limit(bounded).all()
+    query = db.query(Candidate).order_by(Candidate.uploaded_at.desc())
+    if needle:  # resume ID (e.g. TRU-CN-0007) or candidate name; partial and case-insensitive
+        like = "%" + needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        query = query.filter(or_(Candidate.display_id.ilike(like, escape="\\"), Candidate.candidate_name.ilike(like, escape="\\")))
+    total = query.count()
+    rows = query.offset(offset).limit(bounded).all()
     data = {
         "total": total,
         "limit": bounded,

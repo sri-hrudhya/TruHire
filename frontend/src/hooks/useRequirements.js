@@ -2,11 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { demandApi, jdApi, retentionApi, reviewApi, usersApi } from '../lib/api';
 import { resolveActiveCategory } from '../lib/categories';
+import { sortByStatus } from '../lib/requirements';
 import { assignmentsByCandidate, isAdmin } from '../lib/review';
 import { TIMEOUTS_MS } from '../config/env';
 import { useAuth } from '../context/AuthContext';
 
-const errorText = (err, fallback) => err?.response?.data?.detail || fallback;
+// FastAPI sends a string for its own errors and a list of { msg } objects for request validation errors.
+const errorText = (err, fallback) => {
+  const detail = err?.response?.data?.detail;
+  if (Array.isArray(detail)) return detail.map((d) => d?.msg).filter(Boolean).join(' ') || fallback;
+  return (typeof detail === 'string' && detail) || fallback;
+};
 
 // All data and actions of the Requirements page: the list, the selected requirement, its ranked matches,
 // and the review workflow (status, assignment). The page itself only composes components.
@@ -141,7 +147,8 @@ export default function useRequirements() {
     usersApi.list().then((r) => setUsers(r.data)).catch(() => setUsers([]));
   }, [user]);
 
-  const visibleJds = useMemo(() => (demandId ? jds.filter((j) => j.demand_id === demandId) : jds), [jds, demandId]);
+  // Open first, then Closed, then Cancelled; recomputed whenever a status changes.
+  const visibleJds = useMemo(() => sortByStatus(demandId ? jds.filter((j) => j.demand_id === demandId) : jds), [jds, demandId]);
   const historyOpen = searchParams.get('view') === 'history';
 
   const changeStatus = async (candidateId, status) => {
@@ -183,40 +190,60 @@ export default function useRequirements() {
         await loadJDs();
         loadDemands();
         selectJd(created);
-        setNotice({ type: 'success', message: `Requirement created.${filedUnder(created)}` });
+        setNotice({ type: 'success', message: `Demand created.${filedUnder(created)}` });
       } else {
         const res = await jdApi.update(selectedJd.id, payload);
         loadDemands();
         const bumped = res.data.jd_version > selectedJd.jd_version;
         setSelectedJd(res.data);
         await loadJDs();
-        if (res.data.demand_id && res.data.demand_id !== demandId) {  // an edit can re-file the JD under another demand
+        if (res.data.demand_id && res.data.demand_id !== demandId) {  // an edit can re-file the demand under another folder
           const next = new URLSearchParams(searchParams);
           next.set('demand', res.data.demand_id);
           setSearchParams(next, { replace: true });
         }
         loadMatches(res.data.id);
-        setNotice({ type: 'success', message: `${bumped ? `Saved as version ${res.data.jd_version}.` : 'Requirement updated.'}${filedUnder(res.data)}` });
+        setNotice({ type: 'success', message: `${bumped ? `Saved as version ${res.data.jd_version}.` : 'Demand updated.'}${filedUnder(res.data)}` });
       }
       return true;
     } catch (err) {
-      setNotice({ type: 'error', message: errorText(err, 'Failed to save requirement.') });
+      setNotice({ type: 'error', message: errorText(err, 'Failed to save the demand.') });
       return false;
     }
   };
 
-  const changeJdStatus = async (status) => {
-    const previous = selectedJd;
+  // extras carry what the status needs (cancellation reason / resume ids). Returns null on success, else the error text,
+  // so the popup that collected the extras can stay open and show it.
+  const changeJdStatus = async (status, extras = {}) => {
     setNotice(null);
-    setSelectedJd({ ...selectedJd, status });
     try {
-      const res = await jdApi.setStatus(selectedJd.id, status);
+      const res = await jdApi.setStatus(selectedJd.id, status, extras);
       setSelectedJd(res.data);
       await loadJDs();
-      setNotice({ type: 'success', message: `JD status is now ${res.data.status}.` });
+      setNotice({ type: 'success', message: `Demand status is now ${res.data.status}.` });
+      return null;
     } catch (err) {
-      setSelectedJd(previous);
-      setNotice({ type: 'error', message: errorText(err, 'Could not change the JD status.') });
+      const message = errorText(err, 'Could not change the demand status.');
+      setNotice({ type: 'error', message });
+      return message;
+    }
+  };
+
+  // The end date is tentative: set, change or clear it (null) without touching anything else.
+  const changeEndDate = async (endDate) => {
+    if (endDate && selectedJd.start_date && endDate < selectedJd.start_date) {
+      setNotice({ type: 'error', message: 'End date cannot be before the start date.' });
+      return false;
+    }
+    try {
+      const res = await jdApi.update(selectedJd.id, { end_date: endDate });
+      setSelectedJd(res.data);
+      await loadJDs();
+      setNotice({ type: 'success', message: endDate ? 'End date updated.' : 'End date cleared.' });
+      return true;
+    } catch (err) {
+      setNotice({ type: 'error', message: errorText(err, 'Could not change the end date.') });
+      return false;
     }
   };
 
@@ -227,7 +254,7 @@ export default function useRequirements() {
       setNotice({ type: 'success', message: 'Summary generated.' });
       await loadJDs();
     } catch {
-      setNotice({ type: 'error', message: 'Failed to summarize the requirement.' });
+      setNotice({ type: 'error', message: 'Failed to summarize the demand.' });
     }
   };
 
@@ -241,7 +268,7 @@ export default function useRequirements() {
       if (selectedJd?.id === jd.id) closeJd();
       return true;
     } catch (err) {
-      setNotice({ type: 'error', message: errorText(err, 'Failed to remove the requirement.') });
+      setNotice({ type: 'error', message: errorText(err, 'Failed to remove the demand.') });
       return false;
     }
   };
@@ -267,14 +294,14 @@ export default function useRequirements() {
       setTimeout(() => URL.revokeObjectURL(url), TIMEOUTS_MS.objectUrlRevoke);
     } catch {
       if (tab) tab.close();
-      setStatusError('Could not open the requirement file.');
+      setStatusError('Could not open the demand file.');
     }
   };
 
   return {
     user, jds, visibleJds, demands, demandId, setDemand, selectedJd, creating, loading, notice, setNotice,
     matches, loadingMatches, minMatchScore, coverage, statusError, assignments, users, retention,
-    historyOpen, showHistory, closeJd, changeJdStatus,
+    historyOpen, showHistory, closeJd, changeJdStatus, changeEndDate,
     selectJd, startCreate, loadMatches, changeStatus, assign, saveJd, summarize, removeJd, runRetentionCleanup, openJdFile,
     setSelectedJd, setCreating,
   };

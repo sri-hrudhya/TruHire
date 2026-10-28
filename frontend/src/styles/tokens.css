@@ -3,25 +3,25 @@
    new work uses the semantic names below. */
 :root {
   /* Ground and ink */
-  --bg-app: #eef0ee;        /* newsprint grey */
-  --bg-surface: #f8f9f7;    /* a sheet laid on the desk */
-  --bg-card: #f8f9f7;
-  --bg-subtle: #e4e8e4;
-  --bg-hover: #d9ded9;
+  --bg-app: #eef1f7;        /* newsprint grey */
+  --bg-surface: #f8f9fc;    /* a sheet laid on the desk */
+  --bg-card: #f8f9fc;
+  --bg-subtle: #e3e8f2;
+  --bg-hover: #d6ddec;
 
-  --text-main: #15191c;     /* ink */
-  --text-muted: #4a5459;
-  --text-subtle: #5f6a6f;
+  --text-main: #14182b;     /* ink */
+  --text-muted: #474f68;
+  --text-subtle: #58607a;
 
-  /* One action colour: wire teal */
-  --primary: #0b6e5c;
-  --primary-hover: #095a4b;
-  --primary-light: #dcebe6;
-  --primary-border: #a9ccc3;
+  /* One action colour: logo blue (the navy-indigo of the TruHire mark) */
+  --primary: #3a4aa0;
+  --primary-hover: #2d3a85;
+  --primary-light: #e1e6f5;
+  --primary-border: #aab7e0;
   --on-primary: #ffffff;
 
-  --border-color: #cbd2cc;
-  --border-strong: #9aa59f;
+  --border-color: #c9d0e2;
+  --border-strong: #98a2c0;
 
   /* State colours, used only where they carry meaning */
   --success: #1f7a3a;
@@ -39,9 +39,9 @@
   --info: #2d5d8a;
   --info-bg: #e1eaf2;
 
-  --overlay: rgba(21, 25, 28, 0.55);
+  --overlay: rgba(15, 18, 40, 0.55);
   --document-bg: #ffffff;   /* resumes and requirement files are white paper in both themes */
-  --focus-ring: #0b6e5c;
+  --focus-ring: #3a4aa0;
 
   /* Logo: navy ink for heads and name, two blues for the shirt and tie */
   --logo-ink: #2d3262;
@@ -86,24 +86,24 @@
 }
 
 [data-theme='dark'] {
-  --bg-app: #101413;
-  --bg-surface: #171c1b;
-  --bg-card: #1b2120;
-  --bg-subtle: #232a29;
-  --bg-hover: #2d3635;
+  --bg-app: #0f1220;
+  --bg-surface: #161a2c;
+  --bg-card: #1a1f33;
+  --bg-subtle: #22283f;
+  --bg-hover: #2c3350;
 
-  --text-main: #e8ecea;
-  --text-muted: #a7b1ae;
-  --text-subtle: #8a9593;
+  --text-main: #e8ebf6;
+  --text-muted: #a9b0cc;
+  --text-subtle: #8b93b3;
 
-  --primary: #3fb89f;
-  --primary-hover: #5ccbb3;
-  --primary-light: rgba(63, 184, 159, 0.14);
-  --primary-border: rgba(63, 184, 159, 0.34);
-  --on-primary: #08201b;
+  --primary: #8ea2dc;
+  --primary-hover: #a9b9ea;
+  --primary-light: rgba(142, 162, 220, 0.14);
+  --primary-border: rgba(142, 162, 220, 0.36);
+  --on-primary: #0f1430;
 
-  --border-color: #2b3433;
-  --border-strong: #4a5654;
+  --border-color: #2a3150;
+  --border-strong: #4a5380;
 
   --success: #5fc47d;
   --success-bg: rgba(95, 196, 125, 0.13);
@@ -121,7 +121,7 @@
   --info-bg: rgba(127, 176, 221, 0.13);
 
   --overlay: rgba(0, 0, 0, 0.65);
-  --focus-ring: #5ccbb3;
+  --focus-ring: #a9b9ea;
 
   --logo-ink: #e3e8f7;
   --logo-mid: #8ea2dc;

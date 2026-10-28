@@ -125,6 +125,16 @@
   overflow-y: auto;
 }
 
+/* Collapse control: a row of its own directly under the top bar, ruled off from the links. Desktop only. */
+.sidebar-head {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.sidebar.collapsed .sidebar-head { justify-content: center; }
+
 .icon-btn:hover {
   background-color: var(--bg-subtle);
   color: var(--text-main);
@@ -196,8 +206,8 @@
   outline-offset: 2px;
 }
 
-/* Collapsed sidebar (desktop only): icons only, labels via tooltip + aria-label */
-@media (min-width: 769px) {
+/* Collapsed sidebar: icons only, labels via tooltip + aria-label */
+@media all {
   .sidebar.collapsed {
     --sidebar-width: 76px;
   }
@@ -387,40 +397,11 @@
   grid-template-columns: 1fr 1fr;
 }
 
-.sidebar-backdrop {
-  display: none;
-}
-
-/* Small screens: the sidebar becomes an off-canvas drawer opened from the top bar */
+/* Small screens: the same collapsible sidebar, narrower when expanded. */
 @media (max-width: 768px) {
-  .sidebar {
-    position: fixed;
-    left: 0;
-    top: var(--topbar-height);
-    bottom: 0;
-    height: auto;
-    z-index: 60;
-    transform: translateX(-100%);
-    box-shadow: none;
-    /* Hidden drawer must not be reachable by Tab; visibility flips after the slide-out. */
-    visibility: hidden;
-    transition: transform 0.25s ease, visibility 0s linear 0.25s;
-  }
-
-  .sidebar.mobile-open {
-    transform: translateX(0);
-    box-shadow: var(--shadow-lg);
-    visibility: visible;
-    transition: transform 0.25s ease, visibility 0s;
-  }
-
-  .sidebar-backdrop {
-    display: block;
-    position: fixed;
-    inset: var(--topbar-height) 0 0 0;
-    background-color: rgba(15, 23, 42, 0.45);
-    z-index: 55;
-  }
+  .sidebar { --sidebar-width: 210px; }
+  .sidebar.collapsed { --sidebar-width: 60px; }
+  .sidebar.collapsed .sidebar-nav { padding: 1rem 0.35rem; }
 
   .navbar { padding: 0 0.75rem; }
   .navbar-left, .navbar-right { gap: 0.4rem; }

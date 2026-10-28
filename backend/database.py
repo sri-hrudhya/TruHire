@@ -47,6 +47,8 @@ def ensure_schema():
     _add_missing_columns()
     with engine.begin() as conn:
         conn.execute(text("UPDATE positions SET status = 'Open' WHERE status IS NULL"))
+        conn.execute(text("UPDATE positions SET status = 'Mapped' WHERE status = 'Map'"))
+        conn.execute(text("UPDATE positions SET status = 'Cancelled' WHERE status = 'Closed'"))  # Closed no longer exists
     from backend.models import Candidate, Position, CANDIDATE_ID_PREFIX, POSITION_ID_PREFIX, seed_id_sequence
     db = SessionLocal()
     try:

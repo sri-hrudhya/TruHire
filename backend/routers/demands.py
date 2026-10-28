@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import get_db
-from backend.models import DEFAULT_DEMAND_NAMES, canonical_demand_id, demand_display_id, Demand, Position, User
+from backend.models import INACTIVE_JD_STATUSES, DEFAULT_DEMAND_NAMES, canonical_demand_id, demand_display_id, Demand, Position, User
 
 router = APIRouter(prefix="/api/demands", tags=["demands"])
 
@@ -30,7 +30,9 @@ class DemandResponse(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    jd_count: int = 0
+    jd_count: int = 0  # active demands only: Closed and Cancelled ones stay on record but are not counted
+    clients: List[str] = []  # distinct client names of the counted demands, alphabetical
+    unassigned_client_count: int = 0  # counted demands with no client name
     is_default: bool = False
     display_id: Optional[str] = None
     created_by_name: Optional[str] = None
@@ -66,8 +68,25 @@ def _is_default(demand: Demand) -> bool:
     return (demand.name or "").strip().lower() in _DEFAULT_LOWER
 
 
-def _serialize(demand: Demand, jd_count: int, creator_name: Optional[str] = None) -> dict:
-    return {"display_id": demand_display_id(demand.id), "created_by_name": creator_name,  # None for system-seeded demands
+def _active(db: Session):
+    """Positions that count toward a demand folder (status NULL on pre-status rows means Open)."""
+    return db.query(Position).filter(Position.demand_id.isnot(None), func.coalesce(Position.status, "Open").notin_(INACTIVE_JD_STATUSES))
+
+
+def _client_summary(positions) -> dict:
+    names = {}
+    missing = 0
+    for p in positions:
+        name = (p.client_name or "").strip()
+        if name:
+            names.setdefault(name.lower(), name)  # one entry per client, whatever its casing
+        else:
+            missing += 1
+    return {"clients": sorted(names.values(), key=str.lower), "unassigned_client_count": missing}
+
+
+def _serialize(demand: Demand, jd_count: int, creator_name: Optional[str] = None, clients: Optional[dict] = None) -> dict:
+    return {**(clients or {}), "display_id": demand_display_id(demand.id), "created_by_name": creator_name,  # None for system-seeded demands
             "is_default": _is_default(demand), "id": demand.id, "name": demand.name, "description": demand.description, "created_by": demand.created_by,
             "created_at": demand.created_at, "updated_at": demand.updated_at, "jd_count": jd_count}
 
@@ -78,12 +97,14 @@ def _serialize_jd(p: Position) -> dict:
 
 @router.get("", response_model=List[DemandResponse])
 def list_demands(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    counts = dict(db.query(Position.demand_id, func.count(Position.id)).filter(Position.demand_id.isnot(None)).group_by(Position.demand_id).all())
+    active = {}
+    for p in _active(db).all():
+        active.setdefault(p.demand_id, []).append(p)
     # Only the five canonical categories are ever exposed, in their fixed order.
     demands = db.query(Demand).filter(Demand.id.in_([canonical_demand_id(n) for n in DEFAULT_DEMAND_NAMES])).all()
     demands.sort(key=lambda d: _DEFAULT_LOWER.index(d.name.strip().lower()))
     names = dict(db.query(User.id, User.name).all())
-    return [_serialize(d, counts.get(d.id, 0), names.get(d.created_by)) for d in demands]
+    return [_serialize(d, len(active.get(d.id, [])), names.get(d.created_by), _client_summary(active.get(d.id, []))) for d in demands]
 
 
 @router.post("", response_model=DemandResponse)
@@ -96,7 +117,8 @@ def get_demand(demand_id: str, db: Session = Depends(get_db), user: User = Depen
     demand = _get_demand(demand_id, db)
     jds = _jds_of(demand_id, db)
     creator = db.query(User.name).filter(User.id == demand.created_by).scalar() if demand.created_by else None
-    return {**_serialize(demand, len(jds), creator), "job_descriptions": [_serialize_jd(p) for p in jds]}
+    counted = [p for p in jds if (p.status or "Open") not in INACTIVE_JD_STATUSES]
+    return {**_serialize(demand, len(counted), creator, _client_summary(counted)), "job_descriptions": [_serialize_jd(p) for p in jds]}
 
 
 @router.get("/{demand_id}/job-descriptions", response_model=List[DemandJD])

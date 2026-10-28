@@ -56,7 +56,13 @@ class Demand(Base):
     positions = relationship("Position", back_populates="demand", passive_deletes=True)
 
 
-JD_STATUSES = ("Open", "Closed", "Cancelled", "Fulfilled", "Map")  # lifecycle of a JD (Position)
+JD_STATUSES = ("Open", "Cancelled", "Fulfilled", "Mapped")  # lifecycle of a JD (Position)
+# "Map" was renamed and "Closed" was removed (those demands are Cancelled); old rows and clients are still understood.
+LEGACY_JD_STATUS_ALIASES = {"Map": "Mapped", "Closed": "Cancelled"}
+INACTIVE_JD_STATUSES = ("Cancelled",)  # kept on record but not counted on demand folders
+RESUME_LINKED_JD_STATUSES = ("Mapped", "Fulfilled")  # statuses that name the resume(s) the demand was filled with
+MAX_CANCELLATION_REASON_CHARS = 1000
+CLIENT_NAMES = ("Cretera", "Infosys", "Coforge", "Aaseya", "NTT Data", "Utsuk")  # the clients a demand can belong to
 DEFAULT_JD_STATUS = "Open"
 
 
@@ -83,7 +89,11 @@ class Position(Base):
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)
     location = Column(String, nullable=True)
-    updated_at = Column(DateTime, nullable=True)
+    client_name = Column(String, nullable=True)  # optional; NULL = not stated
+    updated_at = Column(DateTime, nullable=True)  # last modified; NULL = never changed since creation
+    updated_by = Column(String, nullable=True)  # user id of the last modifier; NULL = unknown / never changed
+    cancellation_reason = Column(Text, nullable=True)  # only while status is Cancelled
+    mapped_candidate_ids = Column(JSON, nullable=True)  # candidate ids the demand is Mapped / Fulfilled with
     creator = relationship("User", back_populates="positions")
     demand = relationship("Demand", back_populates="positions")
     matches = relationship("CandidateMatch", back_populates="position", cascade="all, delete-orphan")

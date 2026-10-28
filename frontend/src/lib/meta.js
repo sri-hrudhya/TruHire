@@ -3,8 +3,10 @@
 // Only used until the first response arrives or if a field is missing; the backend stays the source of truth.
 export const FALLBACK_META = Object.freeze({
   roles: ['admin', 'recruiter'],
-  jd_statuses: ['Open', 'Closed', 'Cancelled', 'Fulfilled', 'Map'],
+  jd_statuses: ['Open', 'Cancelled', 'Fulfilled', 'Mapped'],
   default_jd_status: 'Open',
+  resume_linked_jd_statuses: ['Mapped', 'Fulfilled'],
+  client_names: ['Cretera', 'Infosys', 'Coforge', 'Aaseya', 'NTT Data', 'Utsuk'],
   notice_period_units: ['Days', 'Weeks', 'Months'],
   requirement_statuses: ['Pending Review', 'Shortlisted', 'Not Shortlisted'],
   default_requirement_status: 'Pending Review',
@@ -23,6 +25,8 @@ export function normalizeMeta(raw) {
     roles: pick('roles'),
     jd_statuses: pick('jd_statuses'),
     default_jd_status: pick('default_jd_status'),
+    resume_linked_jd_statuses: pick('resume_linked_jd_statuses'),
+    client_names: pick('client_names'),
     notice_period_units: pick('notice_period_units'),
     requirement_statuses: pick('requirement_statuses'),
     default_requirement_status: pick('default_requirement_status'),
