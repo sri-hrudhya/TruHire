@@ -1,7 +1,7 @@
 import logging
 import math
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -909,15 +909,26 @@ def put_job_description_status(id: str, req: JDStatusRequest, db: Session = Depe
     return set_jd_status(id, req.status, db, user, req.cancellation_reason, req.candidate_ids)
 
 
+def _naive_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
 @router.get("/api/requirement-history")
-def get_requirement_history(action: Optional[str] = None, limit: int = 50, offset: int = 0, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Every demand/JD creation, update, status change and deletion, newest first."""
+def get_requirement_history(action: Optional[str] = None, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None, limit: int = 50, offset: int = 0, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Every demand/JD creation, update, status change and deletion, newest first.
+    date_from / date_to bound the entry time (inclusive); timezone-aware values are converted to UTC, naive ones are taken as UTC."""
     if action is not None and action not in HISTORY_ACTIONS:
         raise HTTPException(400, f"Invalid action. Use one of: {', '.join(HISTORY_ACTIONS)}.")
     limit = max(1, min(limit, 200))
     q = db.query(RequirementHistory)
     if action:
         q = q.filter(RequirementHistory.action == action)
+    if date_from and date_to and date_to < date_from:
+        raise HTTPException(400, "date_to cannot be before date_from.")
+    if date_from:
+        q = q.filter(RequirementHistory.created_at >= _naive_utc(date_from))
+    if date_to:
+        q = q.filter(RequirementHistory.created_at <= _naive_utc(date_to))
     total = q.count()
     rows = q.order_by(RequirementHistory.created_at.desc(), RequirementHistory.id.desc()).offset(max(0, offset)).limit(limit).all()
     return {"total": total, "limit": limit, "offset": max(0, offset), "items": [history.serialize(r) for r in rows]}

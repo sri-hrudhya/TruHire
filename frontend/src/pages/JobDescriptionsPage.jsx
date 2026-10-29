@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Clock, History, LayoutGrid, List } from 'lucide-react';
+import { ChevronRight, History, LayoutGrid, List } from 'lucide-react';
 import useRequirements from '../hooks/useRequirements';
 import Notice from '../components/ui/Notice';
 import ResumePreviewModal from '../components/ResumePreviewModal';
@@ -11,7 +11,7 @@ import JdTable from '../components/requirements/JdTable';
 import RequirementHistory from '../components/requirements/RequirementHistory';
 import RequirementEditor from '../components/requirements/RequirementEditor';
 import RequirementMatches from '../components/requirements/RequirementMatches';
-import { DeleteRequirementModal, EmailShortlistModal, RetentionModal } from '../components/requirements/RequirementModals';
+import { DeleteRequirementModal, EmailShortlistModal } from '../components/requirements/RequirementModals';
 import { sortByStatus } from '../lib/requirements';
 import '../components/requirements/requirements.css';
 
@@ -24,7 +24,6 @@ export default function JobDescriptionsPage() {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const [emailing, setEmailing] = useState(false);
-  const [showRetention, setShowRetention] = useState(false);
   const [preview, setPreview] = useState(null);
   const [view, setView] = useState('cards');  // 'cards' or 'list' (spreadsheet-style table)
 
@@ -62,11 +61,6 @@ export default function JobDescriptionsPage() {
           <h1 className="page-header-title">Requirements</h1>
         </div>
         <span className="cluster">
-          {r.retention && (
-            <button type="button" className="link-btn" onClick={() => setShowRetention(true)}>
-              <Clock size={13} aria-hidden="true" /> {r.retention.data_retention_days}-day retention
-            </button>
-          )}
           {!r.historyOpen && (
             <button type="button" className="btn btn-secondary" onClick={toggleView} aria-pressed={view === 'list'}>
               {view === 'list' ? <><LayoutGrid size={16} /> Card view</> : <><List size={16} /> List view</>}
@@ -177,7 +171,6 @@ export default function JobDescriptionsPage() {
       </section>
 
       {deleting && <DeleteRequirementModal jd={deleting} onConfirm={r.removeJd} onClose={() => setDeleting(null)} />}
-      {showRetention && <RetentionModal retention={r.retention} onCleanup={r.runRetentionCleanup} onClose={() => setShowRetention(false)} />}
       {emailing && jd && <EmailShortlistModal jd={jd} candidates={shortlisted} onSent={() => r.loadMatches(jd.id)} onClose={() => setEmailing(false)} />}
       <ResumePreviewModal isOpen={!!preview} onClose={() => setPreview(null)} candidate={preview} />
     </div>

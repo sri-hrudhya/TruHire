@@ -233,7 +233,11 @@
 .landing-grid .new-req-title { font-size: 1.5rem; font-weight: 700; }
 .landing-grid .new-req-hint { font-size: 0.9375rem; line-height: 1.5; color: var(--text-muted); max-width: none; }
 .landing-grid .card.info-card { height: 100%; padding: var(--space-5); gap: var(--space-3); }
-.landing-grid .folder-card-title { font-size: 1.5rem; }
+.landing-grid .folder-card { align-items: center; justify-content: center; text-align: center; }
+.landing-grid .folder-card-title { flex-direction: column; justify-content: center; gap: var(--space-3); font-size: 1.5rem; }
+.landing-grid .folder-card .info-card-facts > div { justify-content: center; gap: var(--space-2); }
+.landing-grid .folder-card .info-card-facts dd { text-align: center; }
+.landing-grid .folder-card .info-card-count { align-self: stretch; margin-top: 0; }
 .landing-grid .info-card-facts { font-size: 0.9375rem; }
 .info-card-count-num { font-size: 2rem; font-weight: 800; line-height: 1; margin-right: var(--space-1); }
 .landing-note { grid-column: span 2; align-items: center; }
@@ -247,6 +251,10 @@
 }
 .folder-search:focus-within { border-color: var(--primary); }
 .folder-search input { flex: 1; min-width: 0; border: none; background: none; padding: var(--space-2) 0; outline: none; color: var(--text-main); }
+.date-filter { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-subtle); font-size: var(--text-sm); }
+.date-filter label { display: inline-flex; align-items: center; gap: var(--space-1); }
+.date-filter input { border: none; background: none; padding: var(--space-2) 0; color: var(--text-main); font: inherit; outline: none; }
+.date-filter:focus-within { border-color: var(--primary); }
 .end-date-input { width: auto; padding: var(--space-1) var(--space-2); }
 
 /* Status note: the small icon beside a Cancelled / Mapped / Fulfilled demand and its popover */
