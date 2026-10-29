@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowRight, Loader2, RefreshCw } from 'lucide-react';
 import { requirementHistoryApi } from '../../lib/api';
 import { HISTORY_ACTION_LABELS, formatDateTime, historyChanges } from '../../lib/requirements';
+import DateRangeFilter from './DateRangeFilter';
 import './requirements.css';
 
 const PAGE = 50;
@@ -11,6 +12,7 @@ export default function RequirementHistory() {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [action, setAction] = useState('');
+  const [range, setRange] = useState({ from: '', to: '' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -18,7 +20,12 @@ export default function RequirementHistory() {
     setLoading(true);
     setError(null);
     try {
-      const res = await requirementHistoryApi.list({ limit: PAGE, offset, action: action || undefined });
+      // Whole local days: start of the From day to the end of the To day, sent as UTC instants.
+      const res = await requirementHistoryApi.list({
+        limit: PAGE, offset, action: action || undefined,
+        date_from: range.from ? new Date(`${range.from}T00:00:00`).toISOString() : undefined,
+        date_to: range.to ? new Date(`${range.to}T23:59:59.999`).toISOString() : undefined,
+      });
       setTotal(res.data.total);
       setItems((prev) => (offset === 0 ? res.data.items : [...prev, ...res.data.items]));
     } catch (err) {
@@ -26,20 +33,23 @@ export default function RequirementHistory() {
     } finally {
       setLoading(false);
     }
-  }, [action]);
+  }, [action, range]);
 
   useEffect(() => { load(0); }, [load]);
 
   return (
     <section className="stack stack-loose" aria-label="Requirement History">
       <div className="cluster cluster-between">
-        <label className="match-status">
-          <span className="input-label jd-status-label">Show</span>
-          <select className="input-field match-status-select" value={action} onChange={(e) => setAction(e.target.value)}>
-            <option value="">All changes</option>
-            {Object.entries(HISTORY_ACTION_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-          </select>
-        </label>
+        <span className="cluster">
+          <label className="match-status">
+            <span className="input-label jd-status-label">Show</span>
+            <select className="input-field match-status-select" value={action} onChange={(e) => setAction(e.target.value)}>
+              <option value="">All changes</option>
+              {Object.entries(HISTORY_ACTION_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select>
+          </label>
+          <DateRangeFilter from={range.from} to={range.to} onChange={setRange} />
+        </span>
         <span className="cluster cluster-tight">
           <span className="slug">{total} {total === 1 ? 'entry' : 'entries'}</span>
           <button type="button" className="btn btn-secondary btn-compact" onClick={() => load(0)} disabled={loading}>
@@ -85,7 +95,7 @@ export default function RequirementHistory() {
       </ol>
 
       {loading && items.length === 0 && <p className="req-empty"><Loader2 size={16} className="animate-spin" /> Loading history…</p>}
-      {!loading && !error && items.length === 0 && <p className="req-empty">No changes recorded yet.</p>}
+      {!loading && !error && items.length === 0 && <p className="req-empty">{range.from || range.to || action ? 'No changes match the current filters.' : 'No changes recorded yet.'}</p>}
       {items.length < total && (
         <p><button type="button" className="btn btn-secondary btn-compact" onClick={() => load(items.length)} disabled={loading}>Load older entries</button></p>
       )}

@@ -3,7 +3,6 @@ import {
   BarChart3,
   Users,
   FileText,
-  UploadCloud,
   Filter,
   Award
 } from 'lucide-react';
@@ -97,7 +96,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Top 4 KPI Metrics */}
-      <div className="grid-4 mb-6" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem' }}>
+      <div className="grid-4 mb-6" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.25rem' }}>
         <div className="card">
           <div className="flex items-center justify-between text-muted mb-2">
             <span className="text-sm font-semibold">Total Candidature</span>
@@ -134,19 +133,6 @@ export default function AnalyticsPage() {
           </div>
           <div className="text-xs text-subtle mt-1">
             Across {summary.evaluated_matches_count || 0} evaluated pairings
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center justify-between text-muted mb-2">
-            <span className="text-sm font-semibold">Upload Sessions</span>
-            <UploadCloud size={18} color="var(--warning)" />
-          </div>
-          <div className="text-xl font-extrabold text-main">
-            {summary.total_batches || 0}
-          </div>
-          <div className="text-xs text-subtle mt-1">
-            {summary.total_duplicate_files || 0} duplicates skipped
           </div>
         </div>
       </div>
