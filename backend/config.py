@@ -193,10 +193,7 @@ class Settings(BaseSettings):
 
     ANALYTICS_TOP_SKILLS: int = 20
     CACHE_TTL_QUERY: int = 60
-<<<<<<< HEAD
-=======
     CACHE_TTL_SEARCH: int = 900  # search results; every candidate/JD/index write clears the "search:" prefix
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     # Scored requirement->candidate matches are expensive (embedding + retrieval + rerankers). They are keyed by
     # JD version and index epoch, so they self-invalidate on any change and can safely live long.
     CACHE_TTL_MATCHES: int = 86400

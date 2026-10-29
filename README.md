@@ -46,7 +46,7 @@ have available.
 
 ## Quickstart with Docker (Recommended)
 
-To run the entire stack (Frontend, Backend, PostgreSQL, Redis, Qdrant, OpenSearch) in containers:
+To run the application stack (Frontend, Backend, PostgreSQL, Redis, and OpenSearch) in containers:
 
 `ash
 # 1. Configure environment
@@ -92,7 +92,7 @@ At minimum, set:
 | `VLLM_BASE_URL` | Your OpenAI-compatible LLM/embedding endpoint |
 | `VLLM_MODEL` | The chat/generation model served at that endpoint |
 | `VLLM_EMBEDDING_MODEL` | The embedding model served at that endpoint (must be a real embedding model, not a chat-only model) |
-| `QDRANT_URL` | Your Qdrant instance |
+| `QDRANT_URL` | Your Qdrant Cloud endpoint |
 | `OPENSEARCH_URL` | Your OpenSearch instance |
 | `LAYA_ENABLED` | Enables the local decision layer (falls back to LLM-only behavior if disabled or unavailable) |
 

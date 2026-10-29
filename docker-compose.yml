@@ -34,21 +34,6 @@ services:
       - truhire-network
     restart: unless-stopped
 
-  qdrant:
-    image: qdrant/qdrant:v1.9.0
-    ports:
-      - "${QDRANT_PORT:-6333}:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/6333' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - truhire-network
-    restart: unless-stopped
-
   opensearch:
     image: opensearchproject/opensearch:2.12.0
     environment:
@@ -104,8 +89,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_URL: ${QDRANT_URL:?Set QDRANT_URL to your Qdrant Cloud endpoint in .env}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-truhire_candidate_vectors}
       OPENSEARCH_URL: http://opensearch:9200
       OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-truhire-candidates-v2}
@@ -142,8 +127,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
       opensearch:
         condition: service_healthy
     networks:
@@ -165,7 +148,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  qdrant_data:
   opensearch_data:
   uploads_data:
   logs_data:

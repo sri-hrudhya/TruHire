@@ -437,15 +437,9 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
             "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "fit_calls": fit_calls}}
     set_cache(cache_key, response, settings.CACHE_TTL_SEARCH)
     logger.info(
-<<<<<<< HEAD
-        "search query=%r position=%s skills=%s min_exp=%s filters=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s laya_calls=%s llm_calls=%s duration_ms=%s",
-        query_text[:80], position_id or "-", active_skills, min_experience, filters.cache_part(), len(scored), len(results),
-        bool(vector_rows), bool(lexical_rows), reranked_by_bge, laya_calls, llm_calls, round((time.perf_counter() - started) * 1000),
-=======
         "search query=%r position=%s skills=%s min_exp=%s filters=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s fit_calls=%s duration_ms=%s",
         query_text[:80], position_id or "-", active_skills, min_experience, filters.cache_part(), len(scored), len(results),
         bool(vector_rows), bool(lexical_rows), reranked_by_bge, fit_calls, round((time.perf_counter() - started) * 1000),
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     )
     if not vector_rows:
         logger.warning("search used no vector results (Qdrant empty/unreachable or collection missing) - ranking is lexical/relational only")

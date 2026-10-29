@@ -78,31 +78,6 @@ _PAYLOAD_INDEXES = ("candidate_id", "location_keys", "role_tokens")
 
 
 def _ensure_payload_index() -> None:
-<<<<<<< HEAD
-    with httpx.Client(timeout=15) as client:
-        for field in _PAYLOAD_INDEXES:
-            response = client.put(
-                _url(f"/collections/{settings.QDRANT_COLLECTION}/index?wait=true"),
-                headers=_headers(), json={"field_name": field, "field_schema": "keyword"},
-            )
-            response.raise_for_status()
-
-
-_filter_indexes_ready = False
-
-
-def _ensure_filter_indexes_once() -> None:
-    """Collections created before location/role filters existed lack their payload indexes (only
-    needed on strict-mode clusters). Create them lazily on first filtered search; never fail the search."""
-    global _filter_indexes_ready
-    if _filter_indexes_ready:
-        return
-    try:
-        _ensure_payload_index()
-        _filter_indexes_ready = True
-    except Exception as exc:
-        logger.warning(f"Qdrant filter payload indexes could not be ensured: {exc}")
-=======
     client = _client()
     for field in _PAYLOAD_INDEXES:
         response = client.put(
@@ -110,7 +85,6 @@ def _ensure_filter_indexes_once() -> None:
             headers=_headers(), json={"field_name": field, "field_schema": "keyword"}, timeout=15,
         )
         response.raise_for_status()
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
 
 
 _filter_indexes_ready = False

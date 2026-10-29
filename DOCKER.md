@@ -58,7 +58,7 @@ Once all containers are up:
 | **Backend API Docs** | [http://localhost:3999/docs](http://localhost:3999/docs) | FastAPI Interactive Swagger UI |
 | **Backend Direct** | [http://localhost:8999](http://localhost:8999) | Direct Backend HTTP Port |
 | **OpenSearch Dashboards** | [http://localhost:5601](http://localhost:5601) | Search Index Explorer |
-| **Qdrant Vector DB** | [http://localhost:6333](http://localhost:6333) | Vector DB REST API |
+| **Qdrant Vector DB** | Qdrant Cloud | Vector DB REST API |
 | **PostgreSQL** | `localhost:5432` | DB: `truhire`, User: `truhire` |
 
 ---

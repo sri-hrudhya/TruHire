@@ -9,19 +9,10 @@ from typing import List, Optional, Tuple
 from backend.config import settings
 from backend.models import Candidate, CandidateMatch, Position
 from backend.services.common.ai_audit import ai_feature
-<<<<<<< HEAD
-from backend.services.llm.laya_service import LayaUnavailable, ask_score_batch
-
-RERANK_QUESTION = "How strong is this candidate's overall fit for this job description?"
-
-=======
 from backend.services.common.cache import get_cache, set_cache
 from backend.services.llm.fit_scoring import score_fits
 
 RERANK_QUESTION = "How strong is this candidate's overall fit for this job description?"
-
-
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
 def _cache_key(*parts: str) -> str:
     digest = hashlib.sha256("||".join(parts).encode("utf-8", "ignore")).hexdigest()
     return f"decision:{digest}"
@@ -74,7 +65,3 @@ def rerank_scores_batch(items: List[Tuple[float, Candidate, Position]]) -> List[
 
 def should_reuse_summary(match: Optional[CandidateMatch], position: Position) -> bool:
     return bool(match and match.llm_summary and match.jd_version == position.jd_version)
-<<<<<<< HEAD
-
-=======
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
