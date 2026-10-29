@@ -3,6 +3,7 @@ import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Sparkles, Lock, Mail, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_ROUTE, safeAppPath } from '../lib/navigation';
+import { COPY } from '../config/copy';
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -60,7 +61,7 @@ export default function AuthPage() {
             height: '48px',
             borderRadius: '12px',
             backgroundColor: 'var(--primary)',
-            color: '#ffffff',
+            color: 'var(--on-primary)',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -149,7 +150,7 @@ export default function AuthPage() {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Sarah Connor"
+                  placeholder={COPY.authPlaceholders.name}
                   className="input-field"
                   style={{ paddingLeft: '38px' }}
                 />
@@ -166,7 +167,7 @@ export default function AuthPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="recruiter@enterprise.com"
+                placeholder={COPY.authPlaceholders.email}
                 className="input-field"
                 style={{ paddingLeft: '38px' }}
               />

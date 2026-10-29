@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, ArrowLeft, Eye, History, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { emailApi, jdApi } from '../lib/api';
 import EmailComposer, { EMAILABLE_STATUSES, EmailStatusBadge, RecipientSelector, formatDateTime } from '../components/EmailComposer';
+import { STORAGE_KEYS } from '../config/env';
 
 const errorText = (err, fallback) => err?.response?.data?.detail || err?.message || fallback;
 
 // Remember the chosen requirement and recipients for the browser session so leaving the page and coming
 // back (or a refresh) does not wipe them. Storage can be unavailable, so every access is guarded.
-const DRAFT_KEY = 'truhire_email_draft';
+const DRAFT_KEY = STORAGE_KEYS.emailDraft;
 const loadDraft = () => {
   try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY)) || {}; } catch { return {}; }
 };
@@ -143,7 +144,7 @@ function SendEmailsSection({ onSent }) {
 function EmailContentModal({ record, onClose }) {
   if (!record) return null;
   return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '1rem' }}>
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'var(--overlay)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '1rem' }}>
       <div className="card" style={{ maxWidth: '680px', width: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.5rem', boxShadow: 'var(--shadow-lg)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800 }}>{record.subject}</h3>
@@ -329,9 +330,6 @@ export default function EmailPage() {
     <div>
       <div style={{ marginBottom: '1.5rem' }}>
         <h1 className="page-header-title" style={{ margin: 0 }}>Email</h1>
-        <p className="page-header-subtitle" style={{ marginTop: '0.35rem' }}>
-          Send personalized emails to shortlisted candidates and review every email sent from here or from Requirements.
-        </p>
       </div>
       <SendEmailsSection onSent={() => setHistoryVersion((v) => v + 1)} />
       <EmailHistorySection refreshToken={historyVersion} />

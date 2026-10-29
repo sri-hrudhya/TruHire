@@ -8,7 +8,6 @@ import {
   Award
 } from 'lucide-react';
 import { analyticsApi, jdApi } from '../lib/api';
-import AIAuditPanel from '../components/AIAuditPanel';
 
 export default function AnalyticsPage() {
   const [data, setData] = useState(null);
@@ -33,7 +32,7 @@ export default function AnalyticsPage() {
         const jdsRes = await jdApi.list();
         setJds(jdsRes.data);
       } catch (err) {
-        console.error('Failed to load JDs for analytics:', err);
+        console.error('Failed to load demands for analytics:', err);
       }
       loadAnalytics();
     };
@@ -59,7 +58,6 @@ export default function AnalyticsPage() {
   const expDist = data?.experience_distribution || {};
   const scoreDist = data?.match_score_distribution || {};
   const topSkills = data?.top_skills || [];
-  const ingestionTimeline = data?.ingestion_timeline || [];
 
   // Find max skill count for percentage bar scaling
   const maxSkillCount = Math.max(...topSkills.map(s => s.count), 1);
@@ -75,9 +73,6 @@ export default function AnalyticsPage() {
           <h1 className="page-header-title">
             Talent Pool Analytics
           </h1>
-          <p className="page-header-subtitle">
-            High-level telemetry, skill distributions, match scores, and recruitment conversion funnel.
-          </p>
         </div>
 
         {/* Filter by Requirement for Match Score Distribution */}
@@ -94,7 +89,7 @@ export default function AnalyticsPage() {
             <option value="">All Requirements (Aggregate)</option>
             {jds.map(jd => (
               <option key={jd.id} value={jd.id}>
-                {jd.display_id ? `${jd.display_id} - ` : ''}{jd.title} (v{jd.jd_version})
+                {jd.display_id ? `${jd.display_id} - ` : ''}{jd.title}
               </option>
             ))}
           </select>
@@ -105,7 +100,7 @@ export default function AnalyticsPage() {
       <div className="grid-4 mb-6" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem' }}>
         <div className="card">
           <div className="flex items-center justify-between text-muted mb-2">
-            <span className="text-sm font-semibold">Total Candidates</span>
+            <span className="text-sm font-semibold">Total Candidature</span>
             <Users size={18} color="var(--primary)" />
           </div>
           <div className="text-xl font-extrabold text-main">
@@ -313,49 +308,6 @@ export default function AnalyticsPage() {
           </div>
         </div>
       </div>
-
-      {/* Row 4: Ingestion Stats Over Time */}
-      <div className="card">
-        <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.25rem' }}>
-          Ingestion Velocity Over Time
-        </h3>
-        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-          Daily volume of candidates parsed, PII-redacted, and indexed into OpenSearch.
-        </p>
-
-        {ingestionTimeline.length > 0 ? (
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1.5rem', height: '140px', padding: '1rem 0' }}>
-            {ingestionTimeline.map((item, idx) => {
-              const maxVol = Math.max(...ingestionTimeline.map(i => i.resumes_added), 1);
-              const heightPct = Math.max(15, Math.round((item.resumes_added / maxVol) * 100));
-              return (
-                <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--primary)' }}>
-                    {item.resumes_added}
-                  </div>
-                  <div style={{
-                    width: '100%',
-                    maxWidth: '42px',
-                    height: `${heightPct}%`,
-                    backgroundColor: 'var(--primary)',
-                    borderRadius: '4px 4px 0 0',
-                    transition: 'height 0.3s ease'
-                  }} />
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-subtle)', whiteSpace: 'nowrap' }}>
-                    {item.date.slice(5)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-subtle)', fontSize: '0.875rem' }}>
-            No timeline data yet.
-          </div>
-        )}
-      </div>
-
-      <AIAuditPanel />
     </div>
   );
 }

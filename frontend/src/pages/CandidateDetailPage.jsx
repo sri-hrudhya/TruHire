@@ -9,19 +9,20 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { candidatesApi } from '../lib/api';
-import AIChatWindow from '../components/AIChatWindow';
 import ResumePreviewModal from '../components/ResumePreviewModal';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { useBackNavigation } from '../lib/navigation';
+import { useMeta } from '../context/MetaContext';
+import CommentThread from '../components/review/CommentThread';
 
 export default function CandidateDetailPage() {
   const { id } = useParams();
+  const { candidate_statuses: candidateStatuses } = useMeta();
   // Back returns to wherever the profile was opened from (Search, Requirements, Ingestion History).
   const { goBack, backLabel } = useBackNavigation('/search', 'Search');
   const [candidate, setCandidate] = useState(null);
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isChatOpen, setIsChatOpen] = useState(false);
   const [isResumeOpen, setIsResumeOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
 
@@ -174,18 +175,8 @@ export default function CandidateDetailPage() {
                 backgroundColor: 'var(--bg-subtle)'
               }}
             >
-              <option value="New">Status: New</option>
-              <option value="Shortlisted">Status: Shortlisted</option>
-              <option value="Interviewed">Status: Interviewed</option>
-              <option value="Rejected">Status: Rejected</option>
+              {candidateStatuses.map((st) => <option key={st} value={st}>{st}</option>)}
             </select>
-
-            <button
-              onClick={() => setIsChatOpen(true)}
-              className="btn btn-primary"
-            >
-              <Sparkles size={16} /> AI Interview Copilot
-            </button>
           </div>
         </div>
 
@@ -264,7 +255,7 @@ export default function CandidateDetailPage() {
                         {m.position_title}
                       </span>
                       <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
-                        Evaluated on v{m.jd_version} {m.is_version_current ? '(Current)' : '(Historical)'}
+                        {m.is_version_current ? 'Current requirement' : 'Earlier requirement version'}
                       </span>
                     </div>
 
@@ -304,19 +295,18 @@ export default function CandidateDetailPage() {
         )}
       </div>
 
+      <section className="card" style={{ marginTop: '2rem', padding: '1.5rem' }}>
+        <div className="section-head"><h2>Team feedback</h2></div>
+        <div style={{ paddingTop: 'var(--space-4)' }}>
+          <CommentThread candidateId={candidate.id} />
+        </div>
+      </section>
+
       {/* Resume Preview Modal */}
       <ResumePreviewModal
         isOpen={isResumeOpen}
         onClose={() => setIsResumeOpen(false)}
         candidate={candidate}
-      />
-
-      {/* Copilot Drawer */}
-      <AIChatWindow
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-        candidateId={candidate.id}
-        title={`AI Copilot: ${candidate.candidate_name}`}
       />
     </div>
   );

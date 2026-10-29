@@ -1,17 +1,18 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ShieldCheck, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { aiAuditApi } from '../lib/api';
+import { useMeta } from '../context/MetaContext';
 
 const FEATURES = [
   'chat', 'search_summary', 'jd_summary', 'jd_skills', 'resume_parse', 'resume_screen',
   'email_draft', 'laya_rerank', 'chat_intent', 'interview_decision', 'guardrail',
 ];
 const STATUSES = ['ok', 'blocked', 'error'];
-const PAGE_SIZE = 25;
 
 const statusBadge = { ok: 'badge-success', blocked: 'badge-warning', error: 'badge-danger' };
 
 export default function AIAuditPanel() {
+  const PAGE_SIZE = useMeta().page_sizes.audit;
   const [filters, setFilters] = useState({ feature: '', status: '' });
   const [page, setPage] = useState(0);
   const [data, setData] = useState({ total: 0, items: [] });

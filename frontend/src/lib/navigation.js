@@ -1,12 +1,13 @@
 // Shared navigation helpers so every page handles "Back" and post-login redirects the same way.
 import { useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { DEFAULT_ROUTE, STORAGE_KEYS } from '../config/env';
 
-export const DEFAULT_ROUTE = '/ingestion';
+export { DEFAULT_ROUTE };
 
 // sessionStorage key holding the Ingestion History filters (its URL query string), so the
 // "Ingestion History" button reopens the view the user last left.
-export const HISTORY_QUERY_KEY = 'truhire_ingestion_history_query';
+export const HISTORY_QUERY_KEY = STORAGE_KEYS.ingestionHistoryQuery;
 
 // Only allow in-app paths as redirect targets (no protocol-relative or external URLs, no login loop).
 export function safeAppPath(path) {

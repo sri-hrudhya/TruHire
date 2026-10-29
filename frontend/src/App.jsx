@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { MetaProvider } from './context/MetaContext';
 
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
-import AIChatWindow from './components/AIChatWindow';
 
 import AuthPage from './pages/AuthPage';
 import IngestionPage from './pages/IngestionPage';
@@ -16,14 +16,18 @@ import CandidateDetailPage from './pages/CandidateDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import EmailPage from './pages/EmailPage';
 import { DEFAULT_ROUTE } from './lib/navigation';
+import { STORAGE_KEYS } from './config/env';
 
-const SIDEBAR_PREF_KEY = 'truhire_sidebar_collapsed';
+const SIDEBAR_PREF_KEY = STORAGE_KEYS.sidebarCollapsed;
+
+const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
 function readSidebarPref() {
   try {
-    return localStorage.getItem(SIDEBAR_PREF_KEY) === '1';
+    const stored = localStorage.getItem(SIDEBAR_PREF_KEY);
+    return stored === null ? isMobile() : stored === '1';  // phones start with the narrow icon rail
   } catch {
-    return false;
+    return isMobile();
   }
 }
 
@@ -31,11 +35,8 @@ function readSidebarPref() {
 function ProtectedLayout() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
-  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
-  // Desktop: collapsed (icons only) vs expanded; remembered across navigation and reloads.
+  // Collapsed (icons only) vs expanded; remembered across navigation and reloads. The arrow under the logo is the only control.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarPref);
-  // Small screens: the sidebar is an off-canvas drawer.
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -45,20 +46,7 @@ function ProtectedLayout() {
     }
   }, [sidebarCollapsed]);
 
-  // Close the mobile drawer after any navigation (link click, browser Back/Forward).
-  useEffect(() => {
-    setMobileNavOpen(false);
-  }, [location.pathname]);
-
-  useEffect(() => {
-    if (!mobileNavOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') setMobileNavOpen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [mobileNavOpen]);
-
   const toggleSidebar = useCallback(() => setSidebarCollapsed((c) => !c), []);
-  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
 
   if (loading) {
     return (
@@ -75,27 +63,12 @@ function ProtectedLayout() {
 
   return (
     <div className="app-container">
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={toggleSidebar}
-        mobileOpen={mobileNavOpen}
-        onCloseMobile={closeMobileNav}
-      />
-      {mobileNavOpen && <div className="sidebar-backdrop" onClick={closeMobileNav} aria-hidden="true" />}
-      <div className="main-content">
-        <Navbar
-          title="TruHire"
-          subtitle="AI-Powered Recruitment & Candidate Search"
-          onOpenChat={() => setIsCopilotOpen(true)}
-          onOpenMenu={() => setMobileNavOpen(true)}
-          menuOpen={mobileNavOpen}
-        />
-        <Outlet />
-        <AIChatWindow
-          isOpen={isCopilotOpen}
-          onClose={() => setIsCopilotOpen(false)}
-          title="TruHire AI Copilot"
-        />
+      <Navbar />
+      <div className="app-body">
+        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+        <div className="main-content">
+          <Outlet />
+        </div>
       </div>
     </div>
   );
@@ -105,6 +78,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
+        <MetaProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<AuthPage />} />
@@ -125,6 +99,7 @@ export default function App() {
             <Route path="*" element={<Navigate to={DEFAULT_ROUTE} replace />} />
           </Routes>
         </BrowserRouter>
+        </MetaProvider>
       </AuthProvider>
     </ThemeProvider>
   );

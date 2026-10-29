@@ -1,11 +1,17 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Float, Text, DateTime, ForeignKey, JSON, UniqueConstraint, Index
+from typing import Optional
+from sqlalchemy import Column, String, Integer, Float, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
 
 def generate_uuid(): return str(uuid.uuid4())
+
+
+ROLE_ADMIN = "admin"
+ROLE_RECRUITER = "recruiter"
+ROLES = (ROLE_ADMIN, ROLE_RECRUITER)
 
 
 class User(Base):
@@ -14,10 +20,50 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=False)
     hashed_password = Column(String, nullable=False)
+    role = Column(String, nullable=True, default=ROLE_RECRUITER)  # NULL on pre-roles rows; treated as recruiter
     created_at = Column(DateTime, default=datetime.utcnow)
     positions = relationship("Position", back_populates="creator")
     batches = relationship("IngestionBatch", back_populates="creator")
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+
+
+DEFAULT_DEMAND_NAMES = ("Java", "GenAI", "Camunda", "Pega", "Others")  # the five fixed categories
+OTHERS_DEMAND_NAME = "Others"
+
+
+def canonical_demand_id(name: str) -> str:
+    return f"default-demand-{name.lower()}"
+
+
+def demand_display_id(demand_id: Optional[str]) -> Optional[str]:
+    """TRU-DM-01..05 for the five fixed demands (their position in DEFAULT_DEMAND_NAMES); None for anything else."""
+    for i, name in enumerate(DEFAULT_DEMAND_NAMES, start=1):
+        if canonical_demand_id(name) == demand_id:
+            return f"TRU-DM-{i:02d}"
+    return None
+
+
+class Demand(Base):
+    """A hiring demand that groups related requirements (Positions). Purely organisational: matching,
+    scoring and candidate statuses stay per-Position, and a Position may exist without a Demand."""
+    __tablename__ = "demands"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)  # NULL for system-seeded default demands
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    positions = relationship("Position", back_populates="demand", passive_deletes=True)
+
+
+JD_STATUSES = ("Open", "Cancelled", "Fulfilled", "Mapped")  # lifecycle of a JD (Position)
+# "Map" was renamed and "Closed" was removed (those demands are Cancelled); old rows and clients are still understood.
+LEGACY_JD_STATUS_ALIASES = {"Map": "Mapped", "Closed": "Cancelled"}
+INACTIVE_JD_STATUSES = ("Cancelled",)  # kept on record but not counted on demand folders
+RESUME_LINKED_JD_STATUSES = ("Mapped", "Fulfilled")  # statuses that name the resume(s) the demand was filled with
+MAX_CANCELLATION_REASON_CHARS = 1000
+CLIENT_NAMES = ("Cretera", "Infosys", "Coforge", "Aaseya", "NTT Data", "Utsuk")  # the clients a demand can belong to
+DEFAULT_JD_STATUS = "Open"
 
 
 class Position(Base):
@@ -34,7 +80,25 @@ class Position(Base):
     original_filename = Column(String, nullable=True)
     # Location / role / work mode read from the JD, cached per jd_version so the LLM runs once per edit.
     search_filters = Column(JSON, nullable=True)
+    # Optional grouping; NULL = standalone requirement. Deleting a Demand never deletes its positions.
+    demand_id = Column(String, ForeignKey("demands.id", ondelete="SET NULL"), nullable=True, index=True)
+    # JD details entered by the recruiter; NULL = not stated. status NULL on pre-status rows is treated as Open.
+    status = Column(String, nullable=True, default=DEFAULT_JD_STATUS, index=True)
+    role = Column(String, nullable=True)
+    experience_years = Column(Float, nullable=True)  # minimum years required
+    experience_max_years = Column(Float, nullable=True)
+    no_of_positions = Column(Integer, nullable=True)  # how many hires the demand is for; NULL on demands made before this field
+    locations = Column(JSON, nullable=True)  # list of places; `location` below mirrors it as "; "-joined text
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    location = Column(String, nullable=True)
+    client_name = Column(String, nullable=True)  # optional; NULL = not stated
+    updated_at = Column(DateTime, nullable=True)  # last modified; NULL = never changed since creation
+    updated_by = Column(String, nullable=True)  # user id of the last modifier; NULL = unknown / never changed
+    cancellation_reason = Column(Text, nullable=True)  # only while status is Cancelled
+    mapped_candidate_ids = Column(JSON, nullable=True)  # candidate ids the demand is Mapped / Fulfilled with
     creator = relationship("User", back_populates="positions")
+    demand = relationship("Demand", back_populates="positions")
     matches = relationship("CandidateMatch", back_populates="position", cascade="all, delete-orphan")
 
 
@@ -79,6 +143,9 @@ class Candidate(Base):
     status = Column(String, default="New", index=True)
     status_updated_by = Column(String, nullable=True)
     status_updated_at = Column(DateTime, nullable=True)
+    # Notice period as stated by the recruiter: a non-negative number plus a unit (see NOTICE_PERIOD_UNITS).
+    notice_period_value = Column(Float, nullable=True)
+    notice_period_unit = Column(String, nullable=True)
     uploaded_by = Column(String, ForeignKey("users.id"), nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     ingestion_batch_id = Column(String, ForeignKey("ingestion_batches.id"), nullable=True)
@@ -148,6 +215,7 @@ class ConversationMessage(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
+CANDIDATE_STATUSES = ("New", "Shortlisted", "Interviewed", "Rejected")  # global pipeline stage of a candidate
 REQUIREMENT_STATUSES = ("Pending Review", "Shortlisted", "Not Shortlisted")
 DEFAULT_REQUIREMENT_STATUS = "Pending Review"
 
@@ -164,9 +232,60 @@ class RequirementCandidateStatus(Base):
     __table_args__ = (UniqueConstraint("position_id", "candidate_id", name="uq_requirement_candidate_status"),)
 
 
+class CandidateAssignment(Base):
+    """Which recruiter reviews a candidate for a requirement. One assignee per (requirement, candidate)."""
+    __tablename__ = "candidate_assignments"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    position_id = Column(String, ForeignKey("positions.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidate_id = Column(String, ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False, index=True)
+    assignee_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    assigned_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("position_id", "candidate_id", name="uq_candidate_assignment"),)
+
+
+class CandidateComment(Base):
+    """Shared review feedback on a candidate, optionally scoped to one requirement. Visible to every user."""
+    __tablename__ = "candidate_comments"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    candidate_id = Column(String, ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False, index=True)
+    position_id = Column(String, ForeignKey("positions.id", ondelete="CASCADE"), nullable=True, index=True)
+    author_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    body = Column(Text, nullable=False)
+    rating = Column(Integer, nullable=True)  # 1-5, optional
+    created_at = Column(DateTime, default=datetime.utcnow)
+    edited_at = Column(DateTime, nullable=True)
+    author = relationship("User", foreign_keys=[author_id])
+
+
 EMAIL_STATUS_SENT = "sent"
 EMAIL_STATUS_SIMULATED = "simulated"
 EMAIL_STATUS_FAILED = "failed"
+
+
+NOTICE_PERIOD_UNITS = ("Days", "Weeks", "Months")
+
+HISTORY_CREATED, HISTORY_UPDATED, HISTORY_DELETED, HISTORY_STATUS_CHANGED = "created", "updated", "deleted", "status_changed"
+HISTORY_ACTIONS = (HISTORY_CREATED, HISTORY_UPDATED, HISTORY_STATUS_CHANGED, HISTORY_DELETED)
+
+
+class RequirementHistory(Base):
+    """Append-only audit trail of demand/JD changes. Item and user fields are snapshots so entries
+    survive deletion of the JD or the user; `changes` maps field -> {old, new} where applicable."""
+    __tablename__ = "requirement_history"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    action = Column(String, nullable=False, index=True)
+    item_type = Column(String, nullable=False, default="jd")  # jd | demand
+    item_id = Column(String, nullable=True, index=True)
+    item_display_id = Column(String, nullable=True)
+    item_title = Column(String, nullable=True)
+    demand_id = Column(String, nullable=True, index=True)
+    demand_display_id = Column(String, nullable=True)
+    demand_name = Column(String, nullable=True)
+    user_id = Column(String, nullable=True)
+    user_name = Column(String, nullable=True)
+    changes = Column(JSON, nullable=True)
 
 
 class EmailRecord(Base):
@@ -224,7 +343,7 @@ class IdSequence(Base):
     value = Column(Integer, nullable=False, default=0)
 
 
-POSITION_ID_PREFIX = "TRU-JD-"
+POSITION_ID_PREFIX = "DM-"
 CANDIDATE_ID_PREFIX = "TRU-CN-"
 
 

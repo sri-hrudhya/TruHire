@@ -1,3 +1,4 @@
+import { STORAGE_KEYS } from '../config/env.js';
 // Client-side response cache for every page (installed once in lib/api.js).
 //
 //  * GET responses are served from memory while fresh (per-endpoint TTL), so revisiting a page or
@@ -19,10 +20,10 @@ const TTL_RULES = [
   [/^\/ingest\/history/, 0],              // history has its own 5s auto-refresh + server cache
   [/\/(file|resume)$/, 0],                // binary downloads
   [/^\/export\//, 0],
-  [/^\/chat\//, 0],
   [/^\/ai-audit/, 15000],
   [/^\/email\/config/, 300000],           // static for the lifetime of the server
   [/^\/auth\/me/, 120000],
+  [/^\/meta/, 300000],                    // enums and limits only change with a server deploy
   [/^\/analytics\//, 60000],
   [/^\/retention\/status/, 60000],
   [/^\/job-descriptions\/[^/]+\/matches/, 300000],
@@ -51,7 +52,7 @@ const ttlFor = (url) => {
 };
 
 const keyFor = (config) => {
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('truhire_token') || '' : '';
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.token) || '' : '';
   return `${token.slice(-16)}|${config.url}|${JSON.stringify(config.params || {})}`;
 };
 

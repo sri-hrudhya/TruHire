@@ -70,7 +70,7 @@ export default function ResumePreviewModal({ isOpen, onClose, candidate: candida
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.65)',
+        backgroundColor: 'var(--overlay)',
         backdropFilter: 'blur(4px)',
         zIndex: 1200,
         display: 'flex',
@@ -90,7 +90,7 @@ export default function ResumePreviewModal({ isOpen, onClose, candidate: candida
           flexDirection: 'column',
           padding: 0,
           overflow: 'hidden',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+          boxShadow: 'var(--shadow-lg)',
           borderRadius: 'var(--radius-lg)'
         }}
       >
@@ -255,7 +255,7 @@ export default function ResumePreviewModal({ isOpen, onClose, candidate: candida
                   width: '100%',
                   height: '100%',
                   border: 'none',
-                  backgroundColor: '#ffffff'
+                  backgroundColor: 'var(--document-bg)'
                 }}
               />
             ) : (

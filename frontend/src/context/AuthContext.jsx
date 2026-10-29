@@ -1,15 +1,16 @@
 import { clearRequestCache } from '../lib/requestCache';
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authApi } from '../lib/api';
+import { STORAGE_KEYS } from '../config/env';
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('truhire_user');
+    const saved = localStorage.getItem(STORAGE_KEYS.user);
     return saved ? JSON.parse(saved) : null;
   });
-  const [token, setToken] = useState(() => localStorage.getItem('truhire_token') || null);
+  const [token, setToken] = useState(() => localStorage.getItem(STORAGE_KEYS.token) || null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,7 +19,7 @@ export const AuthProvider = ({ children }) => {
         try {
           const res = await authApi.getMe();
           setUser(res.data);
-          localStorage.setItem('truhire_user', JSON.stringify(res.data));
+          localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(res.data));
         } catch (err) {
           logout();
         }
@@ -33,8 +34,8 @@ export const AuthProvider = ({ children }) => {
     const { access_token, user: userData } = res.data;
     setToken(access_token);
     setUser(userData);
-    localStorage.setItem('truhire_token', access_token);
-    localStorage.setItem('truhire_user', JSON.stringify(userData));
+    localStorage.setItem(STORAGE_KEYS.token, access_token);
+    localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData));
     return userData;
   };
 
@@ -43,8 +44,8 @@ export const AuthProvider = ({ children }) => {
     const { access_token, user: userData } = res.data;
     setToken(access_token);
     setUser(userData);
-    localStorage.setItem('truhire_token', access_token);
-    localStorage.setItem('truhire_user', JSON.stringify(userData));
+    localStorage.setItem(STORAGE_KEYS.token, access_token);
+    localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData));
     return userData;
   };
 
@@ -52,8 +53,8 @@ export const AuthProvider = ({ children }) => {
     clearRequestCache();
     setToken(null);
     setUser(null);
-    localStorage.removeItem('truhire_token');
-    localStorage.removeItem('truhire_user');
+    localStorage.removeItem(STORAGE_KEYS.token);
+    localStorage.removeItem(STORAGE_KEYS.user);
   };
 
   return (

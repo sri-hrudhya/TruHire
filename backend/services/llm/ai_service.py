@@ -376,22 +376,6 @@ def llm_parse_resume(raw_text: str, filename: str) -> Optional[Dict]:
     }
 
 
-def answer_chat_query(messages: List[Dict[str, str]], context: str) -> str:
-    safe_context = redact_pii(context)
-    payload = [
-        _system(
-            "You are TruHire's recruitment RAG assistant. Answer only from the supplied context and conversation. "
-            "If the context does not contain the answer, say so clearly. Hiring decisions belong to a human recruiter; "
-            "never present a recommendation as a final decision."
-        ),
-        {"role": "system", "content": "Retrieved context:\n" + untrusted("retrieved_context", safe_context[:12000])},
-    ]
-    # Only user/assistant turns are forwarded: a client must never be able to add system instructions.
-    payload.extend(m for m in messages[-12:] if m.get("role") in ("user", "assistant"))
-    with ai_feature("chat"):
-        return chat_completion(payload, temperature=0.15, max_tokens=900, enable_thinking=False).strip()
-
-
 class EmailGenerationError(RuntimeError):
     """The LLM could not produce a usable candidate email. Callers must surface this, never substitute a template."""
 

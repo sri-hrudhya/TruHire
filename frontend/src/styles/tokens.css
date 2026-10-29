@@ -1,0 +1,133 @@
+/* TruHire design tokens: the newsroom-desk world (see ../../DESIGN.md).
+   Legacy names (--bg-*, --text-*, --primary*) are kept so existing screens inherit the new palette;
+   new work uses the semantic names below. */
+:root {
+  /* Ground and ink */
+  --bg-app: #eef1f7;        /* newsprint grey */
+  --bg-surface: #f8f9fc;    /* a sheet laid on the desk */
+  --bg-card: #f8f9fc;
+  --bg-subtle: #e3e8f2;
+  --bg-hover: #d6ddec;
+
+  --text-main: #14182b;     /* ink */
+  --text-muted: #474f68;
+  --text-subtle: #58607a;
+
+  /* One action colour: logo blue (the navy-indigo of the TruHire mark) */
+  --primary: #3a4aa0;
+  --primary-hover: #2d3a85;
+  --primary-light: #e1e6f5;
+  --primary-border: #aab7e0;
+  --on-primary: #ffffff;
+
+  --border-color: #c9d0e2;
+  --border-strong: #98a2c0;
+
+  /* State colours, used only where they carry meaning */
+  --success: #1f7a3a;
+  --success-bg: #e0efe3;
+  --success-text: #14532a;
+
+  --warning: #b7791f;
+  --warning-bg: #f4ead3;
+  --warning-text: #6b4500;
+
+  --danger: #b3261e;
+  --danger-bg: #f6e2df;
+  --danger-text: #7f1a14;
+
+  --info: #2d5d8a;
+  --info-bg: #e1eaf2;
+
+  --overlay: rgba(15, 18, 40, 0.55);
+  --document-bg: #ffffff;   /* resumes and requirement files are white paper in both themes */
+  --focus-ring: #3a4aa0;
+
+  /* Logo: navy ink for heads and name, two blues for the shirt and tie */
+  --logo-ink: #2d3262;
+  --logo-mid: #5565a8;
+  --logo-soft: #b7c9e8;
+
+  /* Elevation is a border; the only shadow is for things that float above the page */
+  --shadow-sm: 0 1px 0 rgba(21, 25, 28, 0.05);
+  --shadow-md: 0 2px 8px rgba(21, 25, 28, 0.12);
+  --shadow-lg: 0 12px 32px rgba(21, 25, 28, 0.2);
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
+
+  /* Type */
+  --font-sans: 'Public Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --measure: 68ch;
+
+  /* Space: 4px base */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+}
+
+[data-theme='dark'] {
+  --bg-app: #0f1220;
+  --bg-surface: #161a2c;
+  --bg-card: #1a1f33;
+  --bg-subtle: #22283f;
+  --bg-hover: #2c3350;
+
+  --text-main: #e8ebf6;
+  --text-muted: #a9b0cc;
+  --text-subtle: #8b93b3;
+
+  --primary: #8ea2dc;
+  --primary-hover: #a9b9ea;
+  --primary-light: rgba(142, 162, 220, 0.14);
+  --primary-border: rgba(142, 162, 220, 0.36);
+  --on-primary: #0f1430;
+
+  --border-color: #2a3150;
+  --border-strong: #4a5380;
+
+  --success: #5fc47d;
+  --success-bg: rgba(95, 196, 125, 0.13);
+  --success-text: #9be0b0;
+
+  --warning: #e0a94a;
+  --warning-bg: rgba(224, 169, 74, 0.13);
+  --warning-text: #f1cf8d;
+
+  --danger: #ef7d74;
+  --danger-bg: rgba(239, 125, 116, 0.13);
+  --danger-text: #f4aaa4;
+
+  --info: #7fb0dd;
+  --info-bg: rgba(127, 176, 221, 0.13);
+
+  --overlay: rgba(0, 0, 0, 0.65);
+  --focus-ring: #a9b9ea;
+
+  --logo-ink: #e3e8f7;
+  --logo-mid: #8ea2dc;
+  --logo-soft: #46568f;
+
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 10px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.6);
+}

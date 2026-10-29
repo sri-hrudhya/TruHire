@@ -1,0 +1,57 @@
+.search-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) 0 var(--space-5);
+  border-bottom: 1px solid var(--border-color);
+}
+.search-bar { display: flex; gap: var(--space-3); }
+.search-input {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-subtle);
+}
+.search-input:focus-within { border-color: var(--primary); }
+.search-input input { flex: 1; min-width: 0; border: none; background: none; outline: none; padding: var(--space-3) 0; font-size: var(--text-base); color: var(--text-main); }
+
+.search-scope { display: flex; flex-direction: column; gap: var(--space-3); }
+.search-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.search-field .input-label { margin-bottom: 0; }
+.search-filters { display: grid; grid-template-columns: 7rem 7rem 7rem minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); }
+@media (max-width: 760px) { .search-filters { grid-template-columns: 1fr 1fr; } }
+.search-suggest { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: baseline; }
+
+.results { display: flex; flex-direction: column; gap: var(--space-4); padding-top: var(--space-4); }
+.results-summary { color: var(--text-muted); }
+.results-summary strong { color: var(--text-main); }
+
+.result-skills { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--text-sm); }
+.skill { color: var(--text-subtle); }
+.skill-hit { color: var(--text-main); font-weight: 600; }
+.result-why { padding-top: var(--space-4); border-top: 1px dashed var(--border-color); display: flex; flex-direction: column; gap: var(--space-3); max-width: 36rem; }
+.skill-miss { color: var(--danger-text); font-weight: 600; }
+.skill-plain { color: var(--text-muted); }
+
+/* Candidate result: a compact row (name + match %) that opens into the full comparison */
+.match-card { border-bottom: 1px solid var(--border-color); }
+.match-toggle {
+  display: flex; align-items: center; gap: var(--space-4); width: 100%;
+  padding: var(--space-3) var(--space-2); background: none; border: none; cursor: pointer; text-align: left; color: var(--text-subtle);
+}
+.match-toggle:hover, .match-card.is-open .match-toggle { background: var(--bg-subtle); }
+.match-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.match-toggle-name { flex: 1; min-width: 0; font-family: var(--font-serif); font-size: var(--text-lg); font-weight: 600; color: var(--text-main); }
+.match-panel { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4) var(--space-2) var(--space-5); }
+.match-panel-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.skill-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); }
+.skill-group-title { font-family: var(--font-sans); font-size: var(--text-sm); font-weight: 600; margin-bottom: var(--space-2); }
+.score-kv { margin-top: 0; }
+.score-detail { display: block; }
+.score-neg { color: var(--danger-text); }
+.score-total { font-weight: 700; }

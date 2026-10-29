@@ -1,10 +1,12 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, EmailStr, ConfigDict
 from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database import get_db
-from backend.models import User
+from backend.models import ROLE_ADMIN, ROLE_RECRUITER, User
 from backend.rate_limit import limiter
 from backend.auth import (
     verify_password,
@@ -27,6 +29,7 @@ class UserResponse(BaseModel):
     id: str
     email: str
     name: str
+    role: Optional[str] = ROLE_RECRUITER
 
 
 class TokenResponse(BaseModel):
@@ -45,11 +48,13 @@ def register(request: Request, req: UserRegisterRequest, db: Session = Depends(g
             detail="A user with this email already exists."
         )
 
+    email = req.email.lower().strip()
     hashed_pw = get_password_hash(req.password)
     new_user = User(
         email=req.email.lower().strip(),
         name=req.name.strip(),
-        hashed_password=hashed_pw
+        hashed_password=hashed_pw,
+        role=ROLE_ADMIN if email in settings.bootstrap_admin_emails else ROLE_RECRUITER,
     )
     db.add(new_user)
     db.commit()

@@ -14,7 +14,9 @@ Principles:
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+
+from sqlalchemy import or_
 
 MAX_FILTER_CHARS = 100
 MAX_TITLES = 10
@@ -123,36 +125,53 @@ def role_tokens(raw: Optional[str]) -> Tuple[str, ...]:
 
 # --- Filter object ---------------------------------------------------------------------
 
+MAX_LOCATION_FILTERS = 10
+
+
 @dataclass(frozen=True)
 class SearchFilters:
-    location: Optional[str] = None            # recruiter-visible text
+    location: Optional[str] = None            # recruiter-visible text (several places joined with ", ")
     role: Optional[str] = None
-    location_key: Optional[str] = None        # normalized, drives matching and the cache key
+    location_keys: Tuple[str, ...] = ()       # normalized, one per place; a candidate matching ANY qualifies
     role_tokens: Tuple[str, ...] = ()
 
     @property
+    def location_key(self) -> Optional[str]:
+        """The first place; what a single-location filter used to be."""
+        return self.location_keys[0] if self.location_keys else None
+
+    @property
     def active(self) -> bool:
-        return bool(self.location_key or self.role_tokens)
+        return bool(self.location_keys or self.role_tokens)
 
     def cache_part(self) -> Dict[str, Any]:
-        return {"location": self.location_key, "role": " ".join(self.role_tokens) or None}
+        return {"location": "|".join(sorted(self.location_keys)) or None, "role": " ".join(self.role_tokens) or None}
 
 
 NO_FILTERS = SearchFilters()
 
 
-def build_filters(location: Optional[str], role: Optional[str]) -> SearchFilters:
-    """Validate and normalize recruiter input. Blank -> no filter; unusable text -> InvalidFilter."""
-    loc_text, role_text = clean_filter_text(location), clean_filter_text(role)
-    if loc_text and len(loc_text) > MAX_FILTER_CHARS or role_text and len(role_text) > MAX_FILTER_CHARS:
+def build_filters(location: Union[str, Sequence[str], None], role: Optional[str]) -> SearchFilters:
+    """Validate and normalize recruiter input. Blank -> no filter; unusable text -> InvalidFilter.
+    `location` is one place or a list of places (a candidate in any of them is eligible)."""
+    places = [location] if location is None or isinstance(location, str) else list(location)
+    texts = [t for t in (clean_filter_text(p) for p in places) if t]
+    role_text = clean_filter_text(role)
+    if any(len(t) > MAX_FILTER_CHARS for t in texts) or role_text and len(role_text) > MAX_FILTER_CHARS:
         raise InvalidFilter(f"Location and role filters are limited to {MAX_FILTER_CHARS} characters.")
-    loc_key = location_key(loc_text) if loc_text else None
-    if loc_text and not loc_key:
-        raise InvalidFilter("Location filter has no recognizable place name.")
+    if len(texts) > MAX_LOCATION_FILTERS:
+        raise InvalidFilter(f"At most {MAX_LOCATION_FILTERS} locations can be searched at once.")
+    keys: List[str] = []
+    for text in texts:
+        key = location_key(text)
+        if not key:
+            raise InvalidFilter("Location filter has no recognizable place name.")
+        if key not in keys:
+            keys.append(key)
     tokens = role_tokens(role_text) if role_text else ()
     if role_text and not tokens:
         raise InvalidFilter("Role filter has no recognizable job title.")
-    return SearchFilters(location=loc_text, role=role_text, location_key=loc_key, role_tokens=tokens)
+    return SearchFilters(location=", ".join(texts) or None, role=role_text, location_keys=tuple(keys), role_tokens=tokens)
 
 
 # --- Candidate side --------------------------------------------------------------------
@@ -208,7 +227,7 @@ def index_payload_fields(location: Optional[str], titles: Any) -> Dict[str, Any]
 
 def candidate_matches(location: Optional[str], titles: Sequence[str], filters: SearchFilters) -> bool:
     """Authoritative eligibility check. Missing metadata never satisfies an active filter."""
-    if filters.location_key and filters.location_key not in location_keys(location):
+    if filters.location_keys and not set(filters.location_keys) & set(location_keys(location)):
         return False
     if filters.role_tokens:
         wanted = set(filters.role_tokens)
@@ -219,8 +238,8 @@ def candidate_matches(location: Optional[str], titles: Sequence[str], filters: S
 
 def apply_sql_prefilter(query, candidate_model, filters: SearchFilters):
     """Cheap, recall-safe narrowing for the relational fallback (a superset of candidate_matches)."""
-    if filters.location_key:
-        query = query.filter(candidate_model.location_norm.like(f"%|{_like_escape(filters.location_key)}|%", escape="\\"))
+    if filters.location_keys:
+        query = query.filter(or_(*(candidate_model.location_norm.like(f"%|{_like_escape(k)}|%", escape="\\") for k in filters.location_keys)))
     for tok in filters.role_tokens:
         query = query.filter(candidate_model.title_norms.like(f"%{_like_escape(tok)}%", escape="\\"))
     return query
@@ -234,16 +253,20 @@ def _like_escape(text: str) -> str:
 
 def qdrant_filter(filters: SearchFilters) -> Optional[Dict[str, Any]]:
     must: List[Dict[str, Any]] = []
-    if filters.location_key:
-        must.append({"key": "location_keys", "match": {"value": filters.location_key}})
+    if len(filters.location_keys) == 1:
+        must.append({"key": "location_keys", "match": {"value": filters.location_keys[0]}})
+    elif filters.location_keys:
+        must.append({"key": "location_keys", "match": {"any": list(filters.location_keys)}})
     must.extend({"key": "role_tokens", "match": {"value": tok}} for tok in filters.role_tokens)
     return {"must": must} if must else None
 
 
 def opensearch_filters(filters: SearchFilters) -> List[Dict[str, Any]]:
     clauses: List[Dict[str, Any]] = []
-    if filters.location_key:
-        clauses.append({"term": {"location_keys": filters.location_key}})
+    if len(filters.location_keys) == 1:
+        clauses.append({"term": {"location_keys": filters.location_keys[0]}})
+    elif filters.location_keys:
+        clauses.append({"terms": {"location_keys": list(filters.location_keys)}})
     clauses.extend({"term": {"role_tokens": tok}} for tok in filters.role_tokens)
     return clauses
 
@@ -291,6 +314,14 @@ def heuristic_jd_filters(jd_text: str) -> Dict[str, str]:
     return out
 
 
+# Document words that name the file, not the job ("Senior Data Scientist Job Description"): never part of a role.
+_TITLE_NOISE = re.compile(r"\b(?:job\s+descriptions?|jds?|job\s+requirements?|requirements?|requisitions?|vacanc(?:y|ies)|openings?|positions?)\b", re.I)
+
+
+def strip_title_noise(title: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", _TITLE_NOISE.sub(" ", title or "")).strip(" -|,;:")
+
+
 def _words(text: str) -> List[str]:
     return re.findall(r"[a-z0-9+#.]+", _ascii_lower(text))
 
@@ -331,7 +362,7 @@ def extract_jd_filters(title: str, jd_text: str) -> Dict[str, Any]:
             role, role_source = value, source
             break
     if not role:
-        cleaned = clean_titles([title])
+        cleaned = clean_titles([strip_title_noise(title)])
         if cleaned:
             role, role_source = cleaned[0], "title"
     work_mode = llm.get("work_mode") or heur["work_mode"] or ""

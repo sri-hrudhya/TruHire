@@ -4,19 +4,16 @@ import {
   UploadCloud,
   FileText,
   RefreshCw,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  Copy,
-  Circle,
   History,
 } from 'lucide-react';
 import { ingestionApi } from '../lib/api';
 import { fromState, HISTORY_QUERY_KEY } from '../lib/navigation';
+import { POLL_MS, STORAGE_KEYS } from '../config/env';
+import IngestedResumes from '../components/ingestion/IngestedResumes';
 
 // The most recent upload in this tab, so its progress is still shown after visiting
 // Ingestion History (or any other section) and coming back.
-const LAST_UPLOAD_KEY = 'truhire_last_upload_batch';
+const LAST_UPLOAD_KEY = STORAGE_KEYS.lastUploadBatch;
 
 function readSession(key) {
   try { return sessionStorage.getItem(key); } catch { return null; }
@@ -31,21 +28,18 @@ function writeSession(key, value) {
   }
 }
 
-// Per-file pipeline states reported live by the backend (see _Progress in routers/ingestion.py).
+// Per-file pipeline states reported by the backend (see _Progress in routers/ingestion.py). Only their weight
+// feeds the bulk progress bar; individual resume statuses are not shown.
 const FILE_STATUS = {
-  queued:     { label: 'Queued',          pct: 0,    tone: 'subtle' },
-  extracting: { label: 'Extracting text', pct: 0.15, tone: 'active' },
-  analyzing:  { label: 'AI analysis',     pct: 0.4,  tone: 'active' },
-  parsed:     { label: 'Parsed',          pct: 0.55, tone: 'active' },
-  embedding:  { label: 'Embedding',       pct: 0.7,  tone: 'active' },
-  indexing:   { label: 'Indexing',        pct: 0.85, tone: 'active' },
-  indexed:    { label: 'Indexed',         pct: 1,    tone: 'success' },
-  duplicate:  { label: 'Duplicate',       pct: 1,    tone: 'warning' },
-  failed:     { label: 'Failed',          pct: 1,    tone: 'danger' },
-};
-const TONE_COLOR = {
-  subtle: 'var(--text-subtle)', active: 'var(--primary)', success: 'var(--success-text)',
-  warning: 'var(--warning-text)', danger: 'var(--danger-text)',
+  queued: { pct: 0 },
+  extracting: { pct: 0.15 },
+  analyzing: { pct: 0.4 },
+  parsed: { pct: 0.55 },
+  embedding: { pct: 0.7 },
+  indexing: { pct: 0.85 },
+  indexed: { pct: 1 },
+  duplicate: { pct: 1 },
+  failed: { pct: 1 },
 };
 const STAGES = [
   { key: 'reading', label: 'Reading & AI analysis' },
@@ -80,6 +74,7 @@ export default function IngestionPage() {
   const [activeUploadId, setActiveUploadId] = useState(() => readSession(LAST_UPLOAD_KEY));
   const [uploadProgress, setUploadProgress] = useState(null);
   const [dragActive, setDragActive] = useState(false);
+  const [resumesVersion, setResumesVersion] = useState(0);
 
   const fileInputRef = useRef(null);
 
@@ -97,6 +92,7 @@ export default function IngestionPage() {
         setUploadProgress(res.data);
         if (res.data.status === 'completed' || res.data.status === 'failed') {
           setActiveUploadId(null);
+          setResumesVersion((v) => v + 1);
         }
       } catch (err) {
         if (cancelled) return;
@@ -110,7 +106,7 @@ export default function IngestionPage() {
       }
     };
     poll();
-    const interval = setInterval(poll, 800);
+    const interval = setInterval(poll, POLL_MS.uploadProgress);
 
     return () => { cancelled = true; clearInterval(interval); };
   }, [activeUploadId]);
@@ -173,48 +169,22 @@ export default function IngestionPage() {
 
   return (
     <div className="page-body">
-      {/* Title & Stats Overview */}
-      <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 className="page-header-title" style={{ margin: 0 }}>
-            Bulk Resume Ingestion
-          </h1>
-          <p className="page-header-subtitle" style={{ marginTop: '0.35rem' }}>
-            Upload candidates to the global shared talent pool. Automatic PII redaction, SHA-256 deduplication, and vector indexing.
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            backgroundColor: 'var(--bg-subtle)',
-            color: 'var(--text-muted)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '20px',
-            padding: '0.3rem 0.75rem'
-          }}>
-            <Clock size={13} color="var(--primary)" />
-          </div>
-          <Link
-            to={`/ingestion/history${readSession(HISTORY_QUERY_KEY) || ''}`}
-            state={fromState(location, 'Ingestion')}
-            className="btn btn-secondary"
-          >
-            <History size={16} /> Ingestion History
-          </Link>
-        </div>
-      </div>
+      <header className="ingest-head">
+        <h1 className="page-header-title">Bulk Resume Ingestion</h1>
+        <Link
+          to={`/ingestion/history${readSession(HISTORY_QUERY_KEY) || ''}`}
+          state={fromState(location, 'Ingestion')}
+          className="btn btn-secondary"
+        >
+          <History size={16} /> Ingestion History
+        </Link>
+      </header>
 
-      <div className="responsive-2col" style={{ gap: '2rem', alignItems: 'start' }}>
-        {/* Left Column: Dropzone & Upload Action */}
-        <div>
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--text-main)' }}>
-              Upload Resumes
-            </h3>
+      <div className="ingest-grid">
+        {/* Left: dropzone & upload action */}
+        <div className="ingest-col">
+          <div className="card ingest-panel">
+            <h3 className="ingest-panel-title">Upload Resumes</h3>
 
             {/* Drag & Drop Area */}
             <div
@@ -322,27 +292,13 @@ export default function IngestionPage() {
               </div>
             )}
           </div>
-
-          {/* Guidelines note */}
-          <div className="card" style={{ backgroundColor: 'var(--bg-subtle)', borderStyle: 'dashed' }}>
-            <h4 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.5rem' }}>
-              TruHire Privacy & Decoupled Architecture
-            </h4>
-            <ul style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', paddingLeft: '1.25rem', lineHeight: 1.6 }}>
-              <li>Candidates are added directly to the shared global pool, not tied to any single position.</li>
-              <li>Strict PII redaction runs prior to any embedding generation or LLM call.</li>
-              <li>SHA-256 hash checking prevents duplicate entries.</li>
-            </ul>
-          </div>
         </div>
 
-        {/* Right Column: Live progress of the upload just kicked off */}
-        <div>
-          <div className="card">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                Upload Progress
-              </h3>
+        {/* Right: live progress of the upload just kicked off */}
+        <div className="ingest-col">
+          <div className="card ingest-panel">
+            <div className="ingest-panel-head">
+              <h3 className="ingest-panel-title">Upload Progress</h3>
               {activeUploadId && uploadProgress?.status === 'processing' && (
                 <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                   <RefreshCw size={12} /> Processing
@@ -414,32 +370,6 @@ export default function IngestionPage() {
                   </div>
                 </div>
 
-                {/* Live per-file status */}
-                {sum.files.length > 0 && (
-                  <div style={{ marginTop: '1.25rem' }}>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>
-                      Files ({sum.files.length})
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '260px', overflowY: 'auto' }}>
-                      {sum.files.map((f, i) => {
-                        const meta = FILE_STATUS[f.status] || FILE_STATUS.queued;
-                        const color = TONE_COLOR[meta.tone];
-                        const Icon = meta.tone === 'active' ? RefreshCw : f.status === 'indexed' ? CheckCircle2 : f.status === 'duplicate' ? Copy : f.status === 'failed' ? XCircle : Circle;
-                        return (
-                          <div key={`${f.filename}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.5rem 0.65rem', backgroundColor: 'var(--bg-subtle)', borderRadius: '6px' }}>
-                            <Icon size={15} color={color} className={meta.tone === 'active' ? 'animate-spin' : undefined} style={{ flexShrink: 0 }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.filename}</div>
-                              {f.detail && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.detail}</div>}
-                            </div>
-                            <span style={{ fontSize: '0.7rem', fontWeight: 700, color, flexShrink: 0 }}>{meta.label}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
                 {/* Per-file Error Log / Duplicates */}
                 {uploadProgress.error_log && uploadProgress.error_log.length > 0 && (
                   <div style={{ marginTop: '1.25rem' }}>
@@ -469,13 +399,13 @@ export default function IngestionPage() {
               );
             })()
             ) : (
-              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                Upload resumes to see progress here.
-              </div>
+              <div className="ingest-empty">Upload resumes to see progress here.</div>
             )}
           </div>
         </div>
       </div>
+
+      <IngestedResumes refreshKey={resumesVersion} />
     </div>
   );
 }

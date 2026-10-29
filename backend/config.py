@@ -140,6 +140,22 @@ class Settings(BaseSettings):
         return self.JD_RETENTION_DAYS if self.JD_RETENTION_DAYS is not None else self.DATA_RETENTION_DAYS
 
     SEARCH_MAX_TOP_N: int = 100
+    SEARCH_DEFAULT_TOP_N: int = 20
+
+    # Reviewer collaboration + client-facing limits (served to the UI via /api/meta).
+    BOOTSTRAP_ADMIN_EMAILS: str = ""  # comma-separated; these emails register as admin, everyone else as recruiter
+    COMMENT_MAX_CHARS: int = 2000
+    HISTORY_PAGE_SIZE: int = 25
+    AUDIT_PAGE_SIZE: int = 25
+    JD_ACCEPTED_EXTENSIONS: str = ".pdf,.docx,.doc,.rtf,.odt,.txt,.md"
+
+    @property
+    def bootstrap_admin_emails(self) -> set:
+        return {e.strip().lower() for e in self.BOOTSTRAP_ADMIN_EMAILS.split(",") if e.strip()}
+
+    @property
+    def jd_accepted_extensions(self) -> list:
+        return [e.strip() for e in self.JD_ACCEPTED_EXTENSIONS.split(",") if e.strip()]
     HYBRID_VECTOR_WEIGHT: float = 0.60
     HYBRID_LEXICAL_WEIGHT: float = 0.40
     HYBRID_RRF_K: int = 60

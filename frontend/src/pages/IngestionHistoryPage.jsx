@@ -4,6 +4,8 @@ import { History, Search, RefreshCw, CheckCircle2, Copy, XCircle, Clock } from '
 import { ingestionApi } from '../lib/api';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { fromState, useBackNavigation, HISTORY_QUERY_KEY } from '../lib/navigation';
+import { POLL_MS } from '../config/env';
+import { useMeta } from '../context/MetaContext';
 
 const WINDOWS = [
   { label: '10 min', minutes: 10 },
@@ -28,7 +30,6 @@ const STATUS_META = {
   failed: { label: 'Failed', badge: 'badge-danger', Icon: XCircle },
 };
 
-const PAGE_SIZE = 25;
 const DEFAULT_MINUTES = 1440;
 
 // Filters live in the URL (?window=&status=&q=&page=) so browser Back/Forward, refresh and
@@ -52,6 +53,7 @@ export default function IngestionHistoryPage() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { goBack, backLabel } = useBackNavigation('/ingestion', 'Ingestion');
+  const PAGE_SIZE = useMeta().page_sizes.history;
 
   const minutes = minutesFromParam(searchParams.get('window'));
   const statusParam = searchParams.get('status');
@@ -115,14 +117,14 @@ export default function IngestionHistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [minutes, status, debouncedQuery, page]);
+  }, [minutes, status, debouncedQuery, page, PAGE_SIZE]);
 
   useEffect(() => { load(); }, [load]);
 
   // Keep the list live while an upload is being processed in another tab.
   useEffect(() => {
     if (!autoRefresh) return;
-    const id = setInterval(() => load(true), 5000);
+    const id = setInterval(() => load(true), POLL_MS.ingestionHistory);
     return () => clearInterval(id);
   }, [autoRefresh, load]);
 
@@ -154,9 +156,6 @@ export default function IngestionHistoryPage() {
           <h1 className="page-header-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <History size={26} color="var(--primary)" /> Ingestion History
           </h1>
-          <p className="page-header-subtitle" style={{ marginTop: '0.35rem' }}>
-            Every resume that has gone through ingestion: indexed documents, duplicates and failures.
-          </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>

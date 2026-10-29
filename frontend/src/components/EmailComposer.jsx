@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Mail, RefreshCw, Send, Sparkles } from 'lucide-react';
 import { emailApi } from '../lib/api';
+import { useMeta } from '../context/MetaContext';
 
-export const REQUIREMENT_STATUSES = ['Pending Review', 'Shortlisted', 'Not Shortlisted'];
 
 const REQUIREMENT_STATUS_BADGE = {
   'Pending Review': 'badge-neutral',
@@ -55,6 +55,7 @@ export const EMAILABLE_STATUSES = ['Shortlisted', 'Not Shortlisted'];
 const canEmail = (c) => EMAILABLE_STATUSES.includes(c.requirement_status) && Boolean(c.email);
 
 export function RecipientSelector({ candidates, selectedIds, onChange, onStatusChange }) {
+  const { requirement_statuses: REQUIREMENT_STATUSES, default_requirement_status: DEFAULT_STATUS } = useMeta();
   const selectable = candidates.filter(canEmail);
   const allSelected = selectable.length > 0 && selectable.every((c) => selectedIds.includes(c.id));
 
@@ -109,7 +110,7 @@ export function RecipientSelector({ candidates, selectedIds, onChange, onStatusC
                     {onStatusChange ? (
                       <select
                         className="input-field"
-                        value={c.requirement_status || 'Pending Review'}
+                        value={c.requirement_status || DEFAULT_STATUS}
                         onChange={(e) => onStatusChange(c.id, e.target.value)}
                         aria-label={`Status of ${c.candidate_name}`}
                         style={{ width: 'auto', fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
