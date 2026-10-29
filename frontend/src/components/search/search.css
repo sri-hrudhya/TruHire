@@ -23,7 +23,7 @@
 .search-scope { display: flex; flex-direction: column; gap: var(--space-3); }
 .search-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .search-field .input-label { margin-bottom: 0; }
-.search-filters { display: grid; grid-template-columns: 8rem 8rem minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); }
+.search-filters { display: grid; grid-template-columns: 7rem 7rem 7rem minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); }
 @media (max-width: 760px) { .search-filters { grid-template-columns: 1fr 1fr; } }
 .search-suggest { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: baseline; }
 

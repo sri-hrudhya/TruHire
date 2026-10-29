@@ -17,7 +17,7 @@ export default function ResultsPanel({ s, onPreview }) {
           {results.filters && (
             <> · filtered{results.filters.role ? <> by title <strong>{results.filters.role}</strong></> : null}{results.filters.location ? <> in <strong>{results.filters.location}</strong></> : null}</>
           )}
-          {results.scored_against_jd && <> · scored against <strong>{results.scored_against_jd.title}</strong> v{results.scored_against_jd.version}</>}
+          {results.scored_against_jd && <> · scored against <strong>{results.scored_against_jd.title}</strong></>}
         </p>
       )}
       {results?.warnings?.length > 0 && <Notice type="warning">{results.warnings.join(' ')}</Notice>}

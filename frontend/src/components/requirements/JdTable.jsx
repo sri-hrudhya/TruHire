@@ -50,7 +50,7 @@ export default function JdTable({ jds, loading, practiceName, onOpen, onDelete, 
             <tbody>
               {shown.map((jd) => (
                 <tr key={jd.id}>
-                  <td className="nowrap">{jd.display_id || '—'} · v{jd.jd_version}</td>
+                  <td className="nowrap">{jd.display_id || '—'}</td>
                   <td className="req-table-title"><button type="button" className="link-btn" onClick={() => onOpen(jd)}>{jd.title}</button></td>
                   <td className="nowrap">{practiceName(jd.demand_id) || '—'}</td>
                   <td>{jd.client_name || '—'}</td>

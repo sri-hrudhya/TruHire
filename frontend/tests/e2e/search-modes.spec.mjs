@@ -15,7 +15,7 @@ mkdirSync(SHOTS, { recursive: true });
 const NAMES = ['Java', 'GenAI', 'Camunda', 'Pega', 'Others'];
 const demands = NAMES.map((name, i) => ({ id: `d-${name.toLowerCase()}`, name, jd_count: i === 2 ? 2 : 1 }));
 const jd = (id, n, demandName) => ({
-  id, display_id: `TRU-JD-000${n}`, title: `${demandName} Engineer`, jd_text: `${demandName} role text`, jd_summary: null, jd_version: 1,
+  id, display_id: `DM-000${n}`, title: `${demandName} Engineer`, jd_text: `${demandName} role text`, jd_summary: null, jd_version: 1,
   demand_id: `d-${demandName.toLowerCase()}`, created_at: '2026-01-01T00:00:00', file_url: null, original_filename: null,
 });
 const jds = [jd('j-java', 1, 'Java'), jd('j-camunda', 2, 'Camunda'), jd('j-pega', 3, 'Pega')];

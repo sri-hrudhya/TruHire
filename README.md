@@ -44,6 +44,26 @@ configuration (URLs and credentials in `.env`) — none of these are assumed to
 run on any particular host or port. Point them at whatever infrastructure you
 have available.
 
+## Quickstart with Docker (Recommended)
+
+To run the entire stack (Frontend, Backend, PostgreSQL, Redis, Qdrant, OpenSearch) in containers:
+
+`ash
+# 1. Configure environment
+cp .env.docker.example .env
+# Add your LLM key (e.g. GROQ_API_KEY) in .env
+
+# 2. Start all services
+docker compose up --build -d
+`
+
+Open http://localhost:3000 in your browser.  
+For complete Docker details and troubleshooting, see [DOCKER.md](DOCKER.md).
+
+---
+
+## Local Development (Without Docker)
+
 ## Prerequisites
 
 - Python 3.13+ (managed with `uv`)

@@ -9,10 +9,8 @@ from backend.config import settings
 from backend.models import Candidate, Demand, Position, CandidateMatch
 from backend.services.classification import matches_category
 from backend.services.llm import decision
-from backend.services.llm.ai_service import generate_embedding, generate_match_summary, heuristic_match_summary
-from backend.services.common.ai_audit import ai_feature
+from backend.services.llm.ai_service import generate_embedding, heuristic_match_summary
 from backend.services.common.cache import get_cache, set_cache, clear_cache, get_index_epoch
-from backend.services.llm.guardrails import check_search_result
 from backend.services.ingestion.pii import redact_pii
 from backend.services.retrieval.qdrant import search_vectors
 from backend.services.retrieval.opensearch import search_lexical, get_opensearch_client
@@ -79,8 +77,11 @@ def parse_search_query(query_text: str, existing_skills: Optional[List[str]] = N
         except ValueError: pass
     if modifier_mode == "replace":
         updated = found_skills or existing
-    else:
+    elif modifier_mode == "append":
         updated = list(dict.fromkeys(existing + found_skills))
+    else:
+        # A plain new query starts from its own skills; chips from the previous search must not carry over as hard filters.
+        updated = found_skills
     # Remove explicit filter terms from the lexical query so BM25 sees the user's intent.
     clean = re.sub(r"\b(?:only|just|instead|solely|and|also|too|plus|with)\b", " ", query_text, flags=re.I)
     return updated, min_exp, re.sub(r"\s+", " ", clean).strip(), modifier_mode
@@ -326,7 +327,7 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     if min_experience is not None:
         candidates = [c for c in candidates if c.years_experience >= min_experience]
 
-    # Pass 1a (cheap, whole pool): deterministic scoring only. No Laya/LLM calls happen
+    # Pass 1a (cheap, whole pool): deterministic scoring only. No LLM calls happen
     # here, however large `candidates` is.
     deterministic: List[Tuple[Candidate, float, Dict[str, Any]]] = []
     for cand in candidates:
@@ -344,13 +345,10 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         )
         deterministic.append((cand, final_score, breakdown))
 
-    # Pass 1b: one batched Laya call reranks a bounded shortlist near the top of the
-    # deterministic ranking - not the whole pool (which can be up to 500 candidates).
-    # Even batched, Laya measured ~0.4s/candidate on this CPU-only hardware (the model
-    # card's ~30-70ms figures assume a GPU); reranking the full pool could add tens of
-    # seconds to a single search for no benefit, since a candidate far outside the
-    # shortlist has no realistic path into top_n anyway.
-    laya_calls = 0
+    # Pass 1b: the Qwen fit score reranks a bounded shortlist near the top of the deterministic
+    # ranking, not the whole pool (up to 500 candidates); a candidate far outside the shortlist
+    # has no realistic path into top_n anyway.
+    fit_calls = 0
     deterministic.sort(key=lambda row: row[1], reverse=True)
 
     # Pass 1a': BGE cross-encoder over the best chunk of the top of the deterministic
@@ -373,8 +371,8 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
 
     blended = decision.rerank_scores_batch([(score, cand, target_position) for cand, score, _ in shortlist])
     reranked = [
-        (cand, blended_score, breakdown, laya_signal)
-        for (cand, _, breakdown), (blended_score, laya_signal) in zip(shortlist, blended)
+        (cand, blended_score, breakdown, fit_signal)
+        for (cand, _, breakdown), (blended_score, fit_signal) in zip(shortlist, blended)
     ]
     unranked = [(cand, score, breakdown, None) for cand, score, breakdown in rest]
 
@@ -391,10 +389,10 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     }
 
     scored: List[Tuple[Candidate, float, Dict[str, Any], CandidateMatch]] = []
-    for cand, final_score, breakdown, laya_signal in reranked + unranked:
-        if laya_signal:
-            laya_calls += 1
-            breakdown["laya_rerank"] = laya_signal
+    for cand, final_score, breakdown, fit_signal in reranked + unranked:
+        if fit_signal:
+            fit_calls += 1
+            breakdown["llm_rerank"] = fit_signal
         match = None
         if persist_matches:
             match = existing_matches.get(cand.id)
@@ -408,26 +406,15 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     scored.sort(key=lambda row: row[1], reverse=True)
     top_slice = scored[:limit]
 
-    # Pass 2 (expensive, top_n only): LLM narrative generation + guardrails. This is
-    # the step that used to run once per candidate in the whole pool.
+    # Pass 2 (top_n only): a deterministic summary built from the candidate's skills and the JD, so
+    # results never wait on a model. Summaries stored by earlier searches are reused as they are.
     results = []
-    llm_calls = 0
+    safe_jd = redact_pii(target_position.jd_text)
     for cand, score, breakdown, match in top_slice:
-        if not persist_matches:
-            # Ad-hoc query: fast deterministic summary, nothing persisted against a JD.
-            summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, redact_pii(target_position.jd_text), target_position.title)
-        elif decision.should_reuse_summary(match, target_position):
+        if persist_matches and decision.should_reuse_summary(match, target_position):
             summary, quote, section = match.llm_summary, match.cited_quote, match.cited_section
         else:
-            summary, quote, section = generate_match_summary(cand.extracted_skills or [], cand.years_experience, cand.education or "", target_position.title, target_position.jd_text, score)
-            llm_calls += 1
-            with ai_feature("search_summary"):
-                guard = check_search_result(quote, target_position.jd_text, summary)
-            if not guard.passed:
-                safe_jd = redact_pii(target_position.jd_text)
-                summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, safe_jd, target_position.title)
-            # pyrefly: ignore [parse-error]
-            match.llm_summary = summary; match.cited_quote = quote; match.cited_section = section
+            summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, safe_jd, target_position.title)
 
         results.append({"candidate": _candidate_payload(cand), "match_score": score, "score_breakdown": breakdown, "llm_summary": summary, "cited_quote": quote, "cited_section": section})
 
@@ -447,12 +434,12 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     response = {"total_matches": len(scored), "empty_reason": empty_reason, "warnings": warnings, "top_n": limit, "results": results,
             "filters": _filter_report(db, filters, excluded_missing, excluded_mismatch),
             "scored_against_jd": ({"id": base_position.id, "title": base_position.title, "version": base_position.jd_version} if base_position else None),
-            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "laya_calls": laya_calls, "llm_calls": llm_calls}}
-    set_cache(cache_key, response, settings.CACHE_TTL_QUERY)
+            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "fit_calls": fit_calls}}
+    set_cache(cache_key, response, settings.CACHE_TTL_SEARCH)
     logger.info(
-        "search query=%r position=%s skills=%s min_exp=%s filters=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s laya_calls=%s llm_calls=%s duration_ms=%s",
+        "search query=%r position=%s skills=%s min_exp=%s filters=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s fit_calls=%s duration_ms=%s",
         query_text[:80], position_id or "-", active_skills, min_experience, filters.cache_part(), len(scored), len(results),
-        bool(vector_rows), bool(lexical_rows), reranked_by_bge, laya_calls, llm_calls, round((time.perf_counter() - started) * 1000),
+        bool(vector_rows), bool(lexical_rows), reranked_by_bge, fit_calls, round((time.perf_counter() - started) * 1000),
     )
     if not vector_rows:
         logger.warning("search used no vector results (Qdrant empty/unreachable or collection missing) - ranking is lexical/relational only")

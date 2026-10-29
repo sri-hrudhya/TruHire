@@ -66,7 +66,7 @@ export default function JdDetails({ jd, demandName, onStatus, onEdit, onDuplicat
 
       <div className="detail-groups">
         <Group title="Overview" rows={[
-          ['Demand ID', `${jd.display_id || '—'} · v${jd.jd_version}`],
+          ['Demand ID', `${jd.display_id || '—'}`],
           ['Practice', demandName || '—'],
           ['Client', jd.client_name || '—'],
           showRole(jd) && ['Role', jd.role],
@@ -91,7 +91,7 @@ export default function JdDetails({ jd, demandName, onStatus, onEdit, onDuplicat
 
       {jd.jd_summary && (
         <div className="req-summary">
-          <h3>Summary · version {jd.jd_version}</h3>
+          <h3>Summary</h3>
           <p>{jd.jd_summary}</p>
         </div>
       )}

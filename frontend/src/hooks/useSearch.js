@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { candidatesApi, demandApi, exportApi, jdApi, searchApi } from '../lib/api';
 import { jdAfterCategoryChange, prefillFromJdFilters, resolveActiveCategory, searchDecision } from '../lib/categories';
 import { STORAGE_KEYS } from '../config/env';
@@ -21,6 +21,7 @@ export default function useSearch() {
   const [locations, setLocations] = useState([]);
   const [role, setRole] = useState('');
   const [jdFilterInfo, setJdFilterInfo] = useState(null);
+  const [positions, setPositions] = useState('');    // narrows the requirement choices to demands with this many positions
   const [topN, setTopN] = useState(null);
   const [jds, setJds] = useState([]);
   const [demands, setDemands] = useState([]);
@@ -28,53 +29,23 @@ export default function useSearch() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState(null);
   const [exporting, setExporting] = useState(null);
-  const hydrated = useRef(false);
   const effectiveTopN = topN ?? searchLimits.default_top_n;
 
   const rememberCategory = (id) => { setCategoryId(id); writeStored(STORAGE_KEYS.searchCategory, id); };
 
-  // Restore the last search (kept server-side) so results survive visiting a profile and coming back.
+  // The page always opens on an empty form; only the lists and the remembered category are loaded.
   useEffect(() => {
     (async () => {
       try {
-        const [jdRes, stateRes, demandRes] = await Promise.all([
-          jdApi.list(), searchApi.getState(), demandApi.list().catch(() => ({ data: [] })),
-        ]);
-        const list = jdRes.data;
+        const [jdRes, demandRes] = await Promise.all([jdApi.list(), demandApi.list().catch(() => ({ data: [] }))]);
         const cats = demandRes.data || [];
-        setJds(list);
+        setJds(jdRes.data);
         setDemands(cats);
-        const state = stateRes.data?.state;
-        if (!state) return;
-        const jd = list.find((j) => j.id === state.position_id);
-        setQuery(state.query || '');
-        setChips(state.filter_skills || []);
-        setMinExp(state.min_experience ?? '');
-        setJdId(state.position_id || '');
-        setLocations([]);  // hard filters are never restored (see the search state endpoint)
-        setRole(state.role || '');
-        setTopN(state.top_n || null);
-        // The remembered category only counts while it exists and still contains the restored requirement.
         const stored = resolveActiveCategory(cats, readStored(STORAGE_KEYS.searchCategory));
-        const fits = stored && (!state.position_id || jd?.demand_id === stored);
-        setCategoryId(fits ? stored : '');
-        if (!fits) writeStored(STORAGE_KEYS.searchCategory, '');
-        setResults({
-          total_matches: state.total_matches || 0,
-          top_n: state.top_n,
-          results: state.results || [],
-          retrieval: state.retrieval || {},
-          scored_against_jd: state.position_id ? { id: state.position_id, title: jd?.title || 'Selected requirement', version: jd?.jd_version || '' } : null,
-          active_filter_chips: state.filter_skills || [],
-          min_experience: state.min_experience ?? null,
-          location: state.location || null,
-          role: state.role || null,
-          query: state.query || '',
-        });
+        setCategoryId(stored || '');
+        if (!stored) writeStored(STORAGE_KEYS.searchCategory, '');
       } catch (err) {
-        console.error('Failed to restore the saved search:', err);
-      } finally {
-        hydrated.current = true;
+        console.error('Failed to load the search lists:', err);
       }
     })();
   }, []);
@@ -155,11 +126,10 @@ export default function useSearch() {
   const removeChip = (chip) => setChips(chips.filter((c) => c !== chip));
   const clearRoleLocation = () => { setRole(''); setLocations([]); };
 
-  const reset = async () => {
+  const reset = () => {
     rememberCategory('');
-    setQuery(''); setLocations([]); setRole(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
+    setQuery(''); setPositions(''); setLocations([]); setRole(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
     setResults(null); setNotice(null);
-    try { await searchApi.clearState(); } catch (err) { console.error('Failed to clear the saved search:', err); }
   };
 
   const setCandidateStatus = async (candidateId, status) => {
@@ -180,7 +150,7 @@ export default function useSearch() {
   };
 
   return {
-    query, setQuery, chips, minExp, setMinExp, jdId, categoryId, locations, setLocations, role, setRole, jdFilterInfo,
+    query, setQuery, positions, setPositions, chips, minExp, setMinExp, jdId, categoryId, locations, setLocations, role, setRole, jdFilterInfo,
     topN: effectiveTopN, setTopN, jds, demands, results, loading, notice, exporting,
     run, selectJd, selectCategory, removeChip, clearRoleLocation, reset, setCandidateStatus, exportCandidates,
   };

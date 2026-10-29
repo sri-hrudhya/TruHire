@@ -172,8 +172,6 @@ def stub_retrieval(monkeypatch):
     monkeypatch.setattr(search_module, "search_lexical", lambda *a, **k: [])
     monkeypatch.setattr(search_module, "extract_skills_from_jd", lambda text: ["Python", "FastAPI"])
     monkeypatch.setattr(search_module.decision, "rerank_scores_batch", lambda items: [(s, None) for s, _, _ in items])
-    monkeypatch.setattr(search_module, "generate_match_summary", lambda *a, **k: ("summary", "", "Requirements"))
-    monkeypatch.setattr(search_module, "check_search_result", lambda *a, **k: type("G", (), {"passed": True})())
     return pool
 
 

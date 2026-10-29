@@ -10,22 +10,23 @@ from backend.config import settings
 logger = logging.getLogger(__name__)
 
 _redis_client: Optional[redis.Redis] = None
-_redis_init_attempted = False
+_redis_retry_at = 0.0
+_REDIS_RETRY_SECONDS = 30
 _in_memory_store: Dict[str, Tuple[Any, float]] = {}
 
 
 def get_redis_client() -> Optional[redis.Redis]:
     """
     Returns an active Redis client using connection pooling.
-    Falls back gracefully to None if Redis is unreachable.
+    Falls back to None while Redis is unreachable and retries every _REDIS_RETRY_SECONDS.
     """
-    global _redis_client, _redis_init_attempted
+    global _redis_client, _redis_retry_at
     if _redis_client is not None:
         return _redis_client
-    if _redis_init_attempted:
+    if time.time() < _redis_retry_at:
         return None
 
-    _redis_init_attempted = True
+    _redis_retry_at = time.time() + _REDIS_RETRY_SECONDS
     redis_url = settings.effective_redis_url
     if not redis_url:
         return None

@@ -43,7 +43,7 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onDuplicate, o
             <li key={jd.id} className={`info-card-wrap${['Cancelled', 'Mapped', 'Fulfilled'].includes(jd.status) ? ' has-note' : ''}`}>
               <button type="button" className="card card-hover info-card" onClick={() => onOpen(jd)}>
                 <span className="cluster cluster-between">
-                  <span className="slug">{jd.display_id || 'TRU-JD-????'} · v{jd.jd_version}</span>
+                  <span className="slug">{jd.display_id || 'DM-????'}</span>
                   <JdStatusBadge status={jd.status} />
                 </span>
                 <span className="info-card-title">{jd.title}</span>

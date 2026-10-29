@@ -150,7 +150,7 @@ export default function RequirementEditor({ jd, creating, template = null, defau
 
       {!creating && jd?.jd_summary && (
         <div className="req-summary">
-          <h3>Summary · version {jd.jd_version}</h3>
+          <h3>Summary</h3>
           <p>{jd.jd_summary}</p>
         </div>
       )}

@@ -8,7 +8,6 @@ the PostgreSQL check - not the index pre-filter - is what guarantees eligibility
 import uuid
 from datetime import datetime
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -161,16 +160,13 @@ def test_qdrant_search_sends_filter_before_top_k(monkeypatch):
         def json(self): return {"result": [{"id": "1", "score": 0.9, "payload": {"candidate_id": "c1", "chunk_index": 0}}]}
 
     class FakeHttp:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None, timeout=None):
             seen["body"] = json
             return FakeResponse()
 
     monkeypatch.setattr(qdrant, "collection_exists", lambda: True)
     monkeypatch.setattr(qdrant, "_ensure_filter_indexes_once", lambda: None)
-    monkeypatch.setattr(httpx, "Client", FakeHttp)
+    monkeypatch.setattr(qdrant, "_client", lambda: FakeHttp())
     rows = qdrant.search_vectors([0.1], 5, F.build_filters("Pune", None))
     assert seen["body"]["filter"] == {"must": [{"key": "location_keys", "match": {"value": "pune"}}]}
     assert [r["candidate_id"] for r in rows] == ["c1"]
@@ -308,8 +304,6 @@ def retrieval(monkeypatch):
     monkeypatch.setattr(search_module, "search_lexical", lex)
     monkeypatch.setattr(search_module, "extract_skills_from_jd", lambda text: ["Python"])
     monkeypatch.setattr(search_module.decision, "rerank_scores_batch", lambda items: [(s, None) for s, _, _ in items])
-    monkeypatch.setattr(search_module, "generate_match_summary", lambda *a, **k: ("summary", "", "Requirements"))
-    monkeypatch.setattr(search_module, "check_search_result", lambda *a, **k: type("G", (), {"passed": True})())
     return pool
 
 

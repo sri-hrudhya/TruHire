@@ -255,7 +255,7 @@ export default function CandidateDetailPage() {
                         {m.position_title}
                       </span>
                       <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
-                        Evaluated on v{m.jd_version} {m.is_version_current ? '(Current)' : '(Historical)'}
+                        {m.is_version_current ? 'Current requirement' : 'Earlier requirement version'}
                       </span>
                     </div>
 

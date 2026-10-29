@@ -157,11 +157,11 @@ run('demands sort Open -> Mapped -> Fulfilled -> Cancelled, newest first within 
 });
 
 run('folder search matches partial ID or title, ignoring case and punctuation', () => {
-  const jds = [{ display_id: 'TRU-JD-0012', title: 'Senior Java Developer' }, { display_id: 'TRU-JD-0013', title: 'Pega Lead' }];
+  const jds = [{ display_id: 'DM-0012', title: 'Senior Java Developer' }, { display_id: 'DM-0013', title: 'Pega Lead' }];
   assert.equal(filterDemands(jds, '').length, 2);
-  assert.deepEqual(filterDemands(jds, 'java').map((j) => j.display_id), ['TRU-JD-0012']);
-  assert.deepEqual(filterDemands(jds, '0013').map((j) => j.display_id), ['TRU-JD-0013']);
-  assert.deepEqual(filterDemands(jds, 'jd 0012').map((j) => j.display_id), ['TRU-JD-0012']);
+  assert.deepEqual(filterDemands(jds, 'java').map((j) => j.display_id), ['DM-0012']);
+  assert.deepEqual(filterDemands(jds, '0013').map((j) => j.display_id), ['DM-0013']);
+  assert.deepEqual(filterDemands(jds, 'dm 0012').map((j) => j.display_id), ['DM-0012']);
   assert.equal(filterDemands(jds, 'zzz').length, 0);
 });
 

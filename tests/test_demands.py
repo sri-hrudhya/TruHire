@@ -250,7 +250,7 @@ def test_search_modes_pass_through_unchanged(monkeypatch, made):
     jd = make(f"Srch {uuid.uuid4().hex[:5]}", JAVA_JD)
     calls = []
 
-    def fake_search(db, query_text="", skills=None, min_exp=None, position_id=None, top_n=20, location=None, role=None, **kw):
+    def fake_search(db, query_text="", skills=None, min_exp=None, position_id=None, top_n=20, location=None, role=None, demand_id=None, **kw):
         calls.append({"query": query_text, "position_id": position_id})
         return {"results": [], "total_matches": 0, "retrieval": {}}
 

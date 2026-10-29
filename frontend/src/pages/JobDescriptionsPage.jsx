@@ -104,7 +104,7 @@ export default function JobDescriptionsPage() {
             <div className="section-head">
               <h2>{jd.title}</h2>
               <span className="cluster cluster-tight slug">
-                {jd.display_id} · v{jd.jd_version} <JdStatusBadge status={jd.status} />
+                {jd.display_id} <JdStatusBadge status={jd.status} />
               </span>
             </div>
             <div className="category-row" role="tablist" aria-label="Requirement sections">
@@ -146,7 +146,7 @@ export default function JobDescriptionsPage() {
           </>
         ) : view === 'list' ? (
           <>
-            {demand && <div className="section-head"><h2>{demand.name} <span className="slug">{demand.display_id}</span></h2></div>}
+            {demand && <div className="section-head"><h2>{demand.name}</h2></div>}
             <JdTable
               key={demand?.id || 'all'}
               jds={demand ? r.visibleJds : sortByStatus(r.jds)}
@@ -160,7 +160,7 @@ export default function JobDescriptionsPage() {
           </>
         ) : demand ? (
           <>
-            <div className="section-head"><h2>{demand.name} <span className="slug">{demand.display_id} · {demand.jd_count} {demand.jd_count === 1 ? 'demand' : 'demands'}{r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}</span></h2></div>
+            <div className="section-head"><h2>{demand.name} <span className="slug">{demand.jd_count} {demand.jd_count === 1 ? 'demand' : 'demands'}{r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}</span></h2></div>
             <JdCards
               key={demand.id}
               jds={r.visibleJds}

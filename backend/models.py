@@ -343,7 +343,7 @@ class IdSequence(Base):
     value = Column(Integer, nullable=False, default=0)
 
 
-POSITION_ID_PREFIX = "TRU-JD-"
+POSITION_ID_PREFIX = "DM-"
 CANDIDATE_ID_PREFIX = "TRU-CN-"
 
 

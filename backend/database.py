@@ -49,6 +49,11 @@ def ensure_schema():
         conn.execute(text("UPDATE positions SET status = 'Open' WHERE status IS NULL"))
         conn.execute(text("UPDATE positions SET status = 'Mapped' WHERE status = 'Map'"))
         conn.execute(text("UPDATE positions SET status = 'Cancelled' WHERE status = 'Closed'"))  # Closed no longer exists
+        # Demand IDs were renamed from TRU-JD-nnnn to DM-nnnn; carry existing rows, history snapshots and the counter over.
+        conn.execute(text("UPDATE positions SET display_id = 'DM-' || substr(display_id, 8) WHERE display_id LIKE 'TRU-JD-%'"))
+        for table, col in (("requirement_history", "item_display_id"), ("email_records", "position_display_id")):
+            conn.execute(text(f"UPDATE {table} SET {col} = 'DM-' || substr({col}, 8) WHERE {col} LIKE 'TRU-JD-%'"))
+        conn.execute(text("UPDATE id_sequences SET name = 'DM-' WHERE name = 'TRU-JD-' AND NOT EXISTS (SELECT 1 FROM id_sequences WHERE name = 'DM-')"))
     from backend.models import Candidate, Position, CANDIDATE_ID_PREFIX, POSITION_ID_PREFIX, seed_id_sequence
     db = SessionLocal()
     try:

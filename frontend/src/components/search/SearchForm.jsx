@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Search, X } from 'lucide-react';
 import CategoryRow from '../CategoryRow';
 import TagInput from '../ui/TagInput';
-import { jdsInCategory, topNOptions } from '../../lib/categories';
+import { filterJdChoices, jdsInCategory, topNOptions } from '../../lib/categories';
 import { TOP_N_PRESETS } from '../../config/env';
 import { COPY } from '../../config/copy';
 import { useMeta } from '../../context/MetaContext';
@@ -12,7 +12,11 @@ import './search.css';
 export default function SearchForm({ s }) {
   const { search: limits } = useMeta();
   const category = s.demands.find((d) => d.id === s.categoryId);
-  const choices = jdsInCategory(s.jds, s.categoryId);
+  const inCategory = jdsInCategory(s.jds, s.categoryId);
+  // The search bar text also finds demands by title or ID; keywords that match no demand simply don't narrow the list.
+  const byText = filterJdChoices(inCategory, { text: s.query, positions: s.positions, selectedId: s.jdId });
+  const choices = byText.length || !s.query.trim() ? byText : filterJdChoices(inCategory, { positions: s.positions, selectedId: s.jdId });
+  const narrowed = !!(s.query.trim() || s.positions !== '');
   const suggested = s.jdFilterInfo?.locations?.length ? s.jdFilterInfo.locations : s.jdFilterInfo?.location ? [s.jdFilterInfo.location] : [];
   const sameAsSuggested = suggested.length > 0 && suggested.length === s.locations.length && suggested.every((p, i) => p === s.locations[i]);
 
@@ -23,7 +27,7 @@ export default function SearchForm({ s }) {
           <Search size={17} aria-hidden="true" />
           <span className="sr-only">Keywords</span>
           <input type="text" value={s.query} onChange={(e) => s.setQuery(e.target.value)}
-            placeholder="Skills, role or a sentence, such as “Python and Docker, 5+ yrs”" />
+            placeholder="Skills, role, demand title or ID, or a sentence such as “Python and Docker, 5+ yrs”" />
         </label>
         <button type="submit" className="btn btn-primary" disabled={s.loading}>{s.loading ? 'Searching…' : 'Search'}</button>
       </div>
@@ -35,11 +39,12 @@ export default function SearchForm({ s }) {
           <select className="input-field" value={s.jdId} onChange={(e) => s.selectJd(e.target.value)}>
             <option value="">{s.categoryId ? `Any ${category?.name || 'category'} requirement (keywords only)` : 'No requirement (keywords only)'}</option>
             {choices.map((jd) => (
-              <option key={jd.id} value={jd.id}>{jd.display_id ? `${jd.display_id} · ` : ''}{jd.title} (v{jd.jd_version})</option>
+              <option key={jd.id} value={jd.id}>{jd.display_id ? `${jd.display_id} · ` : ''}{jd.title}</option>
             ))}
           </select>
         </label>
-        {s.categoryId && choices.length === 0 && (
+        {narrowed && inCategory.length > 0 && choices.length === 0 && <p className="dek">No demand has that number of positions.</p>}
+        {s.categoryId && inCategory.length === 0 && (
           <p className="dek">
             {category?.name || 'This category'} has no requirements yet.{' '}
             <Link to={`/requirements?demand=${s.categoryId}`}>Open it in Requirements</Link>
@@ -51,6 +56,10 @@ export default function SearchForm({ s }) {
         <label className="search-field">
           <span className="input-label">Minimum years</span>
           <input className="input-field" type="number" min="0" step="0.5" value={s.minExp} onChange={(e) => s.setMinExp(e.target.value)} />
+        </label>
+        <label className="search-field">
+          <span className="input-label">No. of pos.</span>
+          <input className="input-field" type="number" min="1" step="1" value={s.positions} onChange={(e) => s.setPositions(e.target.value)} aria-label="No. of positions" />
         </label>
         <label className="search-field">
           <span className="input-label">Show top</span>

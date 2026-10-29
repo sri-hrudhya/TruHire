@@ -23,6 +23,7 @@ _FILTER_PROPERTIES = {
     "role_tokens": {"type": "keyword"},
 }
 _mapping_synced = False
+_index_ready = False
 
 
 def get_opensearch_client() -> Optional[OpenSearch]:
@@ -55,9 +56,12 @@ def get_opensearch_client() -> Optional[OpenSearch]:
 
 
 def init_opensearch_index() -> bool:
+    global _index_ready
     client = get_opensearch_client()
     if not client:
         return False
+    if _index_ready:
+        return True
     index = settings.OPENSEARCH_INDEX
     try:
         if not client.indices.exists(index=index):
@@ -74,6 +78,7 @@ def init_opensearch_index() -> bool:
             })
         else:
             _sync_filter_mapping(client, index)
+        _index_ready = True
         return True
     except Exception as exc:
         logger.warning(f"OpenSearch index initialization failed: {exc}")

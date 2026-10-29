@@ -1,6 +1,7 @@
 """Minimal Qdrant REST client used as TruHire's persistent vector database."""
 import logging
 from typing import Any, Dict, List, Optional
+import threading
 import time
 import uuid
 import httpx
@@ -22,6 +23,20 @@ def _url(path: str) -> str:
     return settings.QDRANT_URL.rstrip("/") + path
 
 
+_http: Optional[httpx.Client] = None
+_http_lock = threading.Lock()
+
+
+def _client() -> httpx.Client:
+    """One keep-alive client for the process, so each call skips the TLS handshake to Qdrant Cloud."""
+    global _http
+    if _http is None:
+        with _http_lock:
+            if _http is None:
+                _http = httpx.Client(timeout=30, limits=httpx.Limits(max_keepalive_connections=8, keepalive_expiry=60))
+    return _http
+
+
 # In-process cache of "collection exists and has the right dimension", so the hot
 # search/ingest paths do not make extra HTTP round-trips to Qdrant Cloud on every call.
 _state: Dict[str, Any] = {"ok_until": 0.0, "dim": None}
@@ -33,12 +48,12 @@ def _invalidate_state() -> None:
 
 
 def _collection_info() -> Optional[Dict[str, Any]]:
-    with httpx.Client(timeout=10) as client:
-        response = client.get(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers())
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        return response.json().get("result", {})
+    client = _client()
+    response = client.get(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers(), timeout=10)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json().get("result", {})
 
 
 def collection_exists() -> bool:
@@ -63,13 +78,13 @@ _PAYLOAD_INDEXES = ("candidate_id", "location_keys", "role_tokens")
 
 
 def _ensure_payload_index() -> None:
-    with httpx.Client(timeout=15) as client:
-        for field in _PAYLOAD_INDEXES:
-            response = client.put(
-                _url(f"/collections/{settings.QDRANT_COLLECTION}/index?wait=true"),
-                headers=_headers(), json={"field_name": field, "field_schema": "keyword"},
-            )
-            response.raise_for_status()
+    client = _client()
+    for field in _PAYLOAD_INDEXES:
+        response = client.put(
+            _url(f"/collections/{settings.QDRANT_COLLECTION}/index?wait=true"),
+            headers=_headers(), json={"field_name": field, "field_schema": "keyword"}, timeout=15,
+        )
+        response.raise_for_status()
 
 
 _filter_indexes_ready = False
@@ -100,9 +115,9 @@ def ensure_collection(vector_size: int) -> None:
                 f"but embedding model returned dimension {vector_size}. Recreate/reindex the collection with the same embedding model."
             )
     else:
-        with httpx.Client(timeout=30) as client:
-            response = client.put(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers(), json=_collection_body(vector_size))
-            response.raise_for_status()
+        client = _client()
+        response = client.put(_url(f"/collections/{settings.QDRANT_COLLECTION}"), headers=_headers(), json=_collection_body(vector_size))
+        response.raise_for_status()
     _ensure_payload_index()
     _state["ok_until"] = time.time() + settings.INDEX_STATE_TTL
     _state["dim"] = vector_size
@@ -111,10 +126,10 @@ def ensure_collection(vector_size: int) -> None:
 def recreate_collection(vector_size: int) -> None:
     """Drop and recreate the collection with the current memory-efficient layout.
     Destructive: every candidate must be re-indexed afterwards (POST /api/ingest/reindex)."""
-    with httpx.Client(timeout=60) as client:
-        response = client.delete(_url(f"/collections/{settings.QDRANT_COLLECTION}?wait=true"), headers=_headers())
-        if response.status_code != 404:
-            response.raise_for_status()
+    client = _client()
+    response = client.delete(_url(f"/collections/{settings.QDRANT_COLLECTION}?wait=true"), headers=_headers(), timeout=60)
+    if response.status_code != 404:
+        response.raise_for_status()
     _invalidate_state()
     ensure_collection(vector_size)
     bump_index_epoch()
@@ -161,13 +176,13 @@ def upsert_candidates_batch(items: List[tuple]) -> None:
     ensure_collection(len(items[0][1][0]))
     delete_candidates_batch([cid for cid, _, _ in items])
     points = [p for cid, vecs, payload in items for p in _points(cid, vecs, payload)]
-    with httpx.Client(timeout=60) as client:
-        for i in range(0, len(points), 256):
-            response = client.put(
-                _url(f"/collections/{settings.QDRANT_COLLECTION}/points?wait=true"),
-                headers=_headers(), json={"points": points[i:i + 256]}
-            )
-            response.raise_for_status()
+    client = _client()
+    for i in range(0, len(points), 256):
+        response = client.put(
+            _url(f"/collections/{settings.QDRANT_COLLECTION}/points?wait=true"),
+            headers=_headers(), json={"points": points[i:i + 256]}, timeout=60,
+        )
+        response.raise_for_status()
     bump_index_epoch()
 
 
@@ -180,12 +195,12 @@ def delete_candidates_batch(candidate_ids: List[str]) -> None:
         return
     body = {"filter": {"must": [{"key": "candidate_id", "match": {"any": list(candidate_ids)}}]}}
     try:
-        with httpx.Client(timeout=30) as client:
-            response = client.post(
-                _url(f"/collections/{settings.QDRANT_COLLECTION}/points/delete?wait=true"),
-                headers=_headers(), json=body
-            )
-            response.raise_for_status()
+        client = _client()
+        response = client.post(
+            _url(f"/collections/{settings.QDRANT_COLLECTION}/points/delete?wait=true"),
+            headers=_headers(), json=body
+        )
+        response.raise_for_status()
         bump_index_epoch()
     except Exception as exc:
         logger.warning(f"Qdrant batch delete points note: {exc}")
@@ -204,13 +219,13 @@ def search_vectors(query_vector: List[float], top_k: int = 20, filters: SearchFi
         _ensure_filter_indexes_once()
     if settings.QDRANT_QUANTIZATION:
         body["params"] = {"quantization": {"rescore": True, "oversampling": settings.QDRANT_RESCORE_OVERSAMPLING}}
-    with httpx.Client(timeout=30) as client:
-        response = client.post(
-            _url(f"/collections/{settings.QDRANT_COLLECTION}/points/search"),
-            headers=_headers(), json=body
-        )
-        response.raise_for_status()
-        data = response.json()
+    client = _client()
+    response = client.post(
+        _url(f"/collections/{settings.QDRANT_COLLECTION}/points/search"),
+        headers=_headers(), json=body
+    )
+    response.raise_for_status()
+    data = response.json()
     best: Dict[str, Dict[str, Any]] = {}
     for item in data.get("result", []):
         payload = item.get("payload") or {}

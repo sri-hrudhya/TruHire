@@ -38,7 +38,7 @@ flowchart TB
     subgraph S2["2 - REQUIREMENT / JD MANAGEMENT  (/requirements)"]
         direction TB
         R1["Create requirement<br/>paste text OR upload JD file<br/>POST /job-descriptions/extract-text, then review and edit"]
-        R2["Save requirement<br/>POST /api/job-descriptions<br/>display ID TRU-JD-nnnn, version 1"]
+        R2["Save requirement<br/>POST /api/job-descriptions<br/>display ID DM-nnnn, version 1"]
         R3["Edit, delete, view file<br/>edit of JD text bumps jd_version<br/>and clears summary"]
         R4["Optional AI JD summary<br/>POST .../summarize"]
         R5["JD search filters<br/>location, role, work mode<br/>extracted once per jd_version"]

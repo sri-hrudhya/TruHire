@@ -17,6 +17,16 @@ export function nextCategoryId(ids, current, key) {
 // JDs shown in the JD selector: only those assigned to the chosen category (all when none is chosen).
 export const jdsInCategory = (jds, categoryId) => (categoryId ? jds.filter((j) => j.demand_id === categoryId) : jds);
 
+// Narrow the requirement choices by a typed title or demand ID (partial, any case) and by an exact number of positions.
+// The currently selected requirement always stays listed so the dropdown never shows a blank selection.
+export function filterJdChoices(jds, { text = '', positions = '', selectedId = '' } = {}) {
+  const needle = (text || '').trim().toLowerCase();
+  const count = positions === '' || positions == null ? null : Number(positions);
+  return jds.filter((j) => j.id === selectedId
+    || ((!needle || `${j.display_id || ''} ${j.title || ''}`.toLowerCase().includes(needle))
+      && (count == null || Number.isNaN(count) || (j.no_of_positions ?? 1) === count)));
+}
+
 // The JD selection that survives a category change: '' when the selected JD is not in the new category.
 export const jdAfterCategoryChange = (jds, categoryId, selectedJdId) => {
   if (!selectedJdId) return '';

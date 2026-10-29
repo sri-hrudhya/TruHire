@@ -1,5 +1,4 @@
 import { Layers, Plus } from 'lucide-react';
-import { formatDate } from '../../lib/requirements';
 import './requirements.css';
 
 // The landing grid: the New Requirement tile followed by the five practices, sized to fill the screen.
@@ -21,10 +20,8 @@ export default function DemandCards({ demands, loading, onOpen, onCreate }) {
       {demands.map((d) => (
         <li key={d.id}>
           <button type="button" className="card card-hover info-card folder-card" onClick={() => onOpen(d.id)} aria-label={`${d.name}, ${d.position_count || 0} demand${d.position_count === 1 ? '' : 's'}`}>
-            <span className="slug">{d.display_id || d.id}</span>
             <span className="info-card-title folder-card-title"><Layers size={20} aria-hidden="true" /> {d.name}</span>
             <dl className="info-card-facts">
-              <div><dt>Created On</dt><dd>{formatDate(d.created_at)}</dd></div>
               {d.created_by_name && <div><dt>Created By</dt><dd>{d.created_by_name}</dd></div>}
             </dl>
             <span className="info-card-count"><span className="info-card-count-num">{d.position_count || 0}</span> {d.position_count === 1 ? 'demand' : 'demands'}</span>
