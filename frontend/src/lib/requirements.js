@@ -74,7 +74,7 @@ export function validateDetails({ experience, experienceMax, noOfPositions, loca
   if ((locations || []).length > MAX_LOCATIONS) return `Add at most ${MAX_LOCATIONS} locations.`;
   if (!blank(noOfPositions)) {
     const n = Number(noOfPositions);
-    if (!Number.isInteger(n) || n < 1 || n > MAX_POSITIONS) return `No. of positions must be a whole number from 1 to ${MAX_POSITIONS}.`;
+    if (!Number.isInteger(n) || n < 0 || n > MAX_POSITIONS) return `No. of positions must be a whole number from 0 to ${MAX_POSITIONS}.`;
   }
   for (const [label, value] of [['Min experience', experience], ['Max experience', experienceMax]]) {
     if (blank(value)) continue;

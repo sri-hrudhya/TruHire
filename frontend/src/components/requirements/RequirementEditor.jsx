@@ -200,7 +200,7 @@ export default function RequirementEditor({ jd, creating, template = null, defau
         </div>
         <div>
           <label className="input-label" htmlFor="req-positions">No. of Positions</label>
-          <input id="req-positions" className="input-field" type="number" min="1" step="1" required value={details.noOfPositions} onChange={setField('noOfPositions')} />
+          <input id="req-positions" className="input-field" type="number" min="0" step="1" value={details.noOfPositions} onChange={setField('noOfPositions')} />
         </div>
         <div>
           <label className="input-label" htmlFor="req-status">Demand Status</label>

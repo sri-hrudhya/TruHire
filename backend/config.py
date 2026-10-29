@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     LAYA_RERANK_POOL_CAP: int = 50
     FIT_SCORE_WORKERS: int = 16
     CACHE_TTL_DECISION: int = 3600
+    # Interactive search returns deterministic hybrid scores immediately. The
+    # DGX fit reranker can be enabled when slower model-based refinement is desired.
+    SEARCH_LLM_RERANK_ENABLED: bool = False
 
     # Cross-encoder reranker (BGE) applied to the best-matching chunk of each shortlisted
     # candidate. Runs in-process via fastembed/ONNX on CPU; if the model cannot load the

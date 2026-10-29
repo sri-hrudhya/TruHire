@@ -45,7 +45,7 @@ class JDDetails(BaseModel):
     role: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     location: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS * MAX_LOCATIONS)  # legacy single value; derived from `locations`
     locations: Optional[List[str]] = None
-    no_of_positions: Optional[int] = Field(default=None, ge=1, le=MAX_POSITIONS)
+    no_of_positions: Optional[int] = Field(default=None, ge=0, le=MAX_POSITIONS)
     client_name: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
     experience_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)  # minimum
     experience_max_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)
@@ -418,7 +418,8 @@ def create_jd(req: PositionCreateRequest, db: Session, user: User) -> Position:
         file_url=_checked_jd_file_url(req.file_url),
         original_filename=req.original_filename,
         status=DEFAULT_JD_STATUS,
-        role=req.role, location=req.location, locations=req.locations or None, no_of_positions=req.no_of_positions or 1,
+        role=req.role, location=req.location, locations=req.locations or None,
+        no_of_positions=req.no_of_positions,
         client_name=req.client_name, experience_years=req.experience_years,
         experience_max_years=req.experience_max_years, start_date=req.start_date, end_date=req.end_date,
     )

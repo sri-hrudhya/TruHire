@@ -369,7 +369,11 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     shortlist_size = min(len(deterministic), max(limit * 2, settings.LAYA_RERANK_POOL_CAP))
     shortlist, rest = deterministic[:shortlist_size], deterministic[shortlist_size:]
 
-    blended = decision.rerank_scores_batch([(score, cand, target_position) for cand, score, _ in shortlist])
+    blended = (
+        decision.rerank_scores_batch([(score, cand, target_position) for cand, score, _ in shortlist])
+        if settings.SEARCH_LLM_RERANK_ENABLED
+        else [(score, None) for _, score, _ in shortlist]
+    )
     reranked = [
         (cand, blended_score, breakdown, fit_signal)
         for (cand, _, breakdown), (blended_score, fit_signal) in zip(shortlist, blended)

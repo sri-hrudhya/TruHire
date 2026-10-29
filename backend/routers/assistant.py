@@ -35,7 +35,7 @@ class AssistantConfirmJDRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     jd_text: str = Field(..., min_length=1, max_length=100000)
     demand_id: str
-    position_count: Optional[int] = Field(default=None, ge=1, le=10000)
+    position_count: Optional[int] = Field(default=None, ge=0, le=10000)
     role: Optional[str] = Field(default=None, max_length=200)
     location: Optional[str] = Field(default=None, max_length=2000)
     experience_years: Optional[float] = Field(default=None, ge=0, le=60)
@@ -208,7 +208,7 @@ def confirm_jd(request: AssistantConfirmJDRequest, db: Session = Depends(get_db)
         title=request.title,
         jd_text=request.jd_text,
         demand_id=request.demand_id,
-        no_of_positions=request.position_count or 1,
+        no_of_positions=request.position_count if request.position_count is not None else 1,
         role=request.role,
         location=request.location,
         experience_years=request.experience_years,
