@@ -51,7 +51,11 @@ def ctx(monkeypatch):
     db.commit()
     cand_ids = [c.id for c in cands]
 
+<<<<<<< HEAD
     def fake_search(db_, query_text="", filter_skills=None, min_experience=None, position_id=None, top_n=20, location=None, role=None):
+=======
+    def fake_search(db_, query_text="", filter_skills=None, min_experience=None, position_id=None, top_n=20, location=None, role=None, demand_id=None):
+>>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
         rows = db_.query(Candidate).filter(Candidate.id.in_(cand_ids)).all()
         by_id = {c.id: c for c in rows}
         return {"total_matches": len(SCORES), "results": [

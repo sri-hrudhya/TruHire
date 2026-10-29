@@ -1,0 +1,52 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python virtual environment & bytecode
+.venv
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache
+.coverage
+htmlcov/
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+dist/
+
+# IDE & Editor artifacts
+.claude/
+.impeccable/
+.gemini/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local runtime logs & storage (handled by Docker volumes)
+logs/
+uploads/
+*.log
+
+# Evaluation & testing data dumps
+eval/
+Camunda-resumes/
+JD/
+
+# Local environment secrets
+.env
+.env.local
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz

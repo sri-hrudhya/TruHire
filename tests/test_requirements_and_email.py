@@ -36,8 +36,8 @@ def test_requirement_display_id_and_creation():
 
     assert "id" in created
     assert "display_id" in created
-    assert created["display_id"].startswith("TRU-JD-")
-    assert len(created["display_id"]) == 11  # TRU-JD-0004 etc.
+    assert created["display_id"].startswith("DM-")
+    assert len(created["display_id"]) == 7  # DM-0004 etc.
     req_id = created["id"]
     display_id = created["display_id"]
 

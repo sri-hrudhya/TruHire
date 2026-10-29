@@ -13,17 +13,15 @@ with fewer, cheaper calls to a large language model.
   experience, and education fit against a job description, blended with a
   fast local relevance judgment for reranking.
 - **Local decision layer** — a compact, non-autoregressive decision model runs
-  on-box for reranking, chat-intent routing, and output guardrails, so the
+  on-box for reranking and output guardrails, so the
   large language model is only invoked when a confident answer actually
   requires one.
-- **Conversational assistant** — persistent, context-aware chat scoped to a
-  candidate or a job description, backed by retrieval-augmented generation.
-- **Guardrails** — every model-generated summary and chat reply is checked
+- **Guardrails** — every model-generated summary is checked
   for groundedness against its source text and for unsafe/biased language
   before it reaches a user, with a deterministic fallback if a check fails.
 - **PII-aware pipeline** — resumes and job descriptions are redacted before
   being sent to any embedding or generation endpoint.
-- **Persistent state** — search filters, results, and chat conversations
+- **Persistent state** — search filters and results
   survive navigation, backed by SQL as the source of truth.
 
 ## Architecture
@@ -34,17 +32,37 @@ frontend (React + Vite)
         ▼
 backend (FastAPI)
         │
-        ├── PostgreSQL              — users, candidates, requirements, matches, chat, email, AI audit trail
+        ├── PostgreSQL              — users, candidates, requirements, matches, email, AI audit trail
         ├── Qdrant                  — candidate embedding vectors (semantic search)
         ├── OpenSearch              — lexical/BM25 index (keyword search)
         ├── LLM inference endpoint  — OpenAI-compatible chat + embeddings
-        └── Local decision model    — reranking, chat routing, guardrails
+        └── Local decision model    — reranking, guardrails
 ```
 
 The backend talks to Qdrant, OpenSearch, and the LLM endpoint purely over
 configuration (URLs and credentials in `.env`) — none of these are assumed to
 run on any particular host or port. Point them at whatever infrastructure you
 have available.
+
+## Quickstart with Docker (Recommended)
+
+To run the entire stack (Frontend, Backend, PostgreSQL, Redis, Qdrant, OpenSearch) in containers:
+
+`ash
+# 1. Configure environment
+cp .env.docker.example .env
+# Add your LLM key (e.g. GROQ_API_KEY) in .env
+
+# 2. Start all services
+docker compose up --build -d
+`
+
+Open http://localhost:3000 in your browser.  
+For complete Docker details and troubleshooting, see [DOCKER.md](DOCKER.md).
+
+---
+
+## Local Development (Without Docker)
 
 ## Prerequisites
 
@@ -87,7 +105,7 @@ From the repository root (imports are rooted here, not inside `backend/`):
 
 ```bash
 uv sync                      # or: python -m venv .venv && pip install -r requirements.txt
-uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port <your-chosen-port>
+uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port 8999
 ```
 
 Tables are created on first start (PostgreSQL is the only supported database;
@@ -148,7 +166,7 @@ streamed to logged-in users via `GET /api/candidates/{id}/resume` and
 
 ### 5. AI governance
 
-- **Guardrails** (`GUARDRAILS_ENFORCE=true`): search summaries, chat replies, JD
+- **Guardrails** (`GUARDRAILS_ENFORCE=true`): search summaries, JD
   summaries and candidate emails are checked for groundedness and safety; output
   that can't be verified (including when Laya is unavailable) is replaced by a
   deterministic fallback or blocked. Emails can't contain links or contact
@@ -164,8 +182,8 @@ streamed to logged-in users via `GET /api/candidates/{id}/resume` and
 
 ## The Decision Layer
 
-Rather than routing every judgment call (rerank a candidate, decide chat
-intent, verify a generated summary) through the LLM, TruHire first asks a
+Rather than routing every judgment call (rerank a candidate, verify a
+generated summary) through the LLM, TruHire first asks a
 small, local decision model a typed question — a choice, a score, or a
 yes/no — and only escalates to the LLM when that model isn't confident
 enough. This cuts LLM calls substantially on the hot paths (JD-scored search
@@ -182,7 +200,7 @@ backend/
   models.py           # SQLAlchemy models
   auth.py             # Password hashing, JWT issuing, current-user dependency
   worker.py           # arq background worker (optional ingestion queue)
-  routers/            # FastAPI route handlers (auth, ingestion, search, chat, email, ...)
+  routers/            # FastAPI route handlers (auth, ingestion, search, email, ...)
   services/
     ingestion/        # Resume/JD parsing, chunking, PII redaction, injection screening, storage
     retrieval/        # Qdrant + OpenSearch clients, hybrid search, scoring, reranker
@@ -201,7 +219,10 @@ docker-compose.yml    # Local OpenSearch + Dashboards
 ```bash
 uv sync --group dev
 uv run pytest           # backend tests
-(cd frontend && npm test)   # frontend request-cache test
+(cd frontend && npm test)   # frontend unit tests (request cache, categories, meta, review helpers)
+# Browser check of the category row and the three search modes (API mocked at the network layer):
+#   (cd frontend && VITE_BACKEND_PORT=9 VITE_PORT=5199 npm run dev)  then
+#   (cd frontend && E2E_BASE_URL=http://localhost:5199 node tests/e2e/search-modes.spec.mjs)
 ```
 
 The backend tests use a separate `<db>_test` PostgreSQL database (created

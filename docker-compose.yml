@@ -1,17 +1,64 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-truhire}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-truhire_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-truhire}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-truhire} -d $${POSTGRES_DB:-truhire}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - truhire-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - truhire-network
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.0
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - truhire-network
+    restart: unless-stopped
+
   opensearch:
     image: opensearchproject/opensearch:2.12.0
-    container_name: truhire-opensearch
-
     environment:
       - cluster.name=truhire-cluster
       - node.name=truhire-node
       - discovery.type=single-node
       - bootstrap.memory_lock=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-      - "DISABLE_INSTALL_DEMO_CONFIG=true"
-      - "DISABLE_SECURITY_PLUGIN=true"
-
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
     ulimits:
       memlock:
         soft: -1
@@ -19,39 +66,110 @@ services:
       nofile:
         soft: 65536
         hard: 65536
-
     ports:
-      - "9200:9200"
-      - "9600:9600"
-
+      - "${OPENSEARCH_PORT:-9200}:9200"
     volumes:
       - opensearch_data:/usr/share/opensearch/data
-
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'green\\|yellow' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
       - truhire-network
-
+    restart: unless-stopped
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:2.12.0
-    container_name: truhire-dashboards
-
     ports:
       - "5601:5601"
-
     environment:
       - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
       - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
-
     networks:
       - truhire-network
-
     depends_on:
-      - opensearch
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
 
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT:-8999}:8999"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-truhire}:${POSTGRES_PASSWORD:-truhire_secret}@postgres:5432/${POSTGRES_DB:-truhire}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-truhire_candidate_vectors}
+      OPENSEARCH_URL: http://opensearch:9200
+      OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-truhire-candidates-v2}
+      SECRET_KEY: ${SECRET_KEY:-truhire_container_jwt_secret_key_change_me_outside_dev}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      VLLM_MODEL: ${VLLM_MODEL:-}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_API_KEY_1: ${GROQ_API_KEY_1:-${GROQ_API_KEY:-}}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      OPENROUTER_API_KEY_1: ${OPENROUTER_API_KEY_1:-${OPENROUTER_API_KEY:-}}
+      GEMINI_API_KEY_1: ${GEMINI_API_KEY_1:-${GEMINI_API_KEY:-}}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      STORAGE_DIR: /app/uploads
+      RESUME_STORAGE_DIR: /app/uploads/resumes
+      JD_STORAGE_DIR: /app/uploads/job_descriptions
+      LOG_FILE: /app/logs/truhire.log
+      LAYA_ENABLED: ${LAYA_ENABLED:-false}
+      GUARDRAILS_ENFORCE: ${GUARDRAILS_ENFORCE:-true}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-true}
+      BOOTSTRAP_ADMIN_EMAILS: ${BOOTSTRAP_ADMIN_EMAILS:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - uploads_data:/app/uploads
+      - logs_data:/app/logs
+      - model_cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - truhire-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-3999}:80"
+    depends_on:
+      - backend
+    networks:
+      - truhire-network
+    restart: unless-stopped
 
 volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
   opensearch_data:
-
+  uploads_data:
+  logs_data:
+  model_cache:
 
 networks:
   truhire-network:

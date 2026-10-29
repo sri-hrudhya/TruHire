@@ -107,12 +107,13 @@ class Settings(BaseSettings):
     # full pool could add tens of seconds to a single search. This bounds that cost
     # while still reranking where it can actually change the final top_n.
     LAYA_RERANK_POOL_CAP: int = 50
+    FIT_SCORE_WORKERS: int = 16
     CACHE_TTL_DECISION: int = 3600
 
     # Cross-encoder reranker (BGE) applied to the best-matching chunk of each shortlisted
     # candidate. Runs in-process via fastembed/ONNX on CPU; if the model cannot load the
     # search degrades gracefully to the un-reranked ordering.
-    RERANKER_ENABLED: bool = True
+    RERANKER_ENABLED: bool = False  # CPU cross-encoder: about 0.5 s per candidate, so off by default
     RERANKER_MODEL: str = "BAAI/bge-reranker-base"
     RERANKER_POOL_CAP: int = 30
     RERANKER_WEIGHT: float = 0.30
@@ -192,6 +193,10 @@ class Settings(BaseSettings):
 
     ANALYTICS_TOP_SKILLS: int = 20
     CACHE_TTL_QUERY: int = 60
+<<<<<<< HEAD
+=======
+    CACHE_TTL_SEARCH: int = 900  # search results; every candidate/JD/index write clears the "search:" prefix
+>>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     # Scored requirement->candidate matches are expensive (embedding + retrieval + rerankers). They are keyed by
     # JD version and index epoch, so they self-invalidate on any change and can safely live long.
     CACHE_TTL_MATCHES: int = 86400

@@ -116,3 +116,68 @@ def test_retention_status_api():
     assert data["data_retention_days"] == 30
     assert "expired_candidates_count" in data
     assert "expired_positions_count" in data
+
+
+def _fake_llm(title, text):
+    return {"location": "Pune, India" if "Pune" in text else "", "role": "Backend Developer" if "Backend Developer" in text else "", "work_mode": ""}
+
+
+def test_extract_details_from_pasted_text(monkeypatch):
+    monkeypatch.setattr("backend.services.llm.ai_service.llm_extract_jd_filters", _fake_llm)
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    text = "Backend Developer needed in Pune, India. 5+ years of experience with Python and FastAPI. Build services for our platform."
+    res = client.post("/api/job-descriptions/extract-details", headers=headers, json={"title": "", "jd_text": text})
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["location"] == "Pune, India"
+    assert data["detected_title"] == "Backend Developer"
+    assert data["experience_years"] == 5
+    assert client.post("/api/job-descriptions/extract-details", json={"jd_text": text}).status_code == 401
+
+
+def test_extract_details_leaves_unstated_fields_blank(monkeypatch):
+    monkeypatch.setattr("backend.services.llm.ai_service.llm_extract_jd_filters", lambda t, x: None)
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    text = "We are hiring somebody great to work with our team on exciting problems and grow together."
+    data = client.post("/api/job-descriptions/extract-details", headers=headers, json={"title": "Great Hire", "jd_text": text}).json()
+    assert data == {"detected_title": None, "location": None, "experience_years": None, "suggested_demand_id": None}
+    blank = client.post("/api/job-descriptions/extract-details", headers=headers, json={"jd_text": "   "}).json()
+    assert blank == {"detected_title": None, "location": None, "experience_years": None, "suggested_demand_id": None}
+
+
+def test_extract_details_survives_extractor_failure(monkeypatch):
+    def boom(title, text):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr("backend.routers.job_descriptions.extract_jd_filters", boom)
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    res = client.post("/api/job-descriptions/extract-details", headers=headers, json={"jd_text": "Needs 3 years of experience in Java."})
+    assert res.status_code == 200 and res.json()["location"] is None and res.json()["experience_years"] == 3
+
+
+def test_jd_saves_without_role_and_keeps_an_existing_one():
+    from backend.models import Position
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    created = client.post("/api/job-descriptions", headers=headers, json={
+        "title": "Role Free Title", "jd_text": "Java developer with Spring.", "location": "Pune", "experience_years": 4})
+    assert created.status_code == 200, created.text
+    jd = created.json()
+    assert jd["role"] is None and jd["location"] == "Pune" and jd["experience_years"] == 4
+
+    db = SessionLocal()
+    pos = db.query(Position).filter(Position.id == jd["id"]).first()
+    pos.role = "Legacy Role"
+    db.commit()
+    db.close()
+    # Editing other fields without sending a role leaves the stored (legacy) role alone.
+    updated = client.put(f"/api/job-descriptions/{jd['id']}", headers=headers, json={"location": "Mumbai"})
+    assert updated.status_code == 200 and updated.json()["role"] == "Legacy Role"
+
+    db = SessionLocal()
+    db.query(Position).filter(Position.id == jd["id"]).delete()
+    db.commit()
+    db.close()

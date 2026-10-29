@@ -137,8 +137,6 @@ export const candidatesApi = {
 
 export const searchApi = {
   search: (payload) => api.post('/search', payload, { timeout: TIMEOUTS_MS.search }),
-  getState: () => api.get('/search/state'),
-  clearState: () => api.delete('/search/state'),
 };
 
 export const analyticsApi = {
