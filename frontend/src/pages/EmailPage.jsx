@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Eye, History, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { emailApi, jdApi } from '../lib/api';
 import EmailComposer, { EMAILABLE_STATUSES, EmailStatusBadge, RecipientSelector, formatDateTime } from '../components/EmailComposer';
@@ -17,8 +18,9 @@ const saveDraft = (draft) => {
 };
 
 function SendEmailsSection({ onSent }) {
+  const [searchParams] = useSearchParams();
   const [jds, setJds] = useState([]);
-  const [jdId, setJdId] = useState(() => loadDraft().jdId || '');
+  const [jdId, setJdId] = useState(() => searchParams.get('position') || loadDraft().jdId || '');
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);

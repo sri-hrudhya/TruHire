@@ -38,6 +38,7 @@ def ensure_schema():
             # Demands: optional grouping of positions (the demands table itself is made by create_all above).
             "ALTER TABLE positions ADD COLUMN IF NOT EXISTS demand_id VARCHAR REFERENCES demands(id) ON DELETE SET NULL",
             "CREATE INDEX IF NOT EXISTS ix_positions_demand_id ON positions (demand_id)",
+            "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS metadata JSON NOT NULL DEFAULT '{}'::json",
             # System-seeded demands have no creating user.
             "ALTER TABLE demands ALTER COLUMN created_by DROP NOT NULL",
         ):

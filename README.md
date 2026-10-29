@@ -51,13 +51,14 @@ To run the application stack (Frontend, Backend, PostgreSQL, Redis, and OpenSear
 `ash
 # 1. Configure environment
 cp .env.docker.example .env
-# Add your LLM key (e.g. GROQ_API_KEY) in .env
+# Configure the DGX/vLLM endpoint and start the Tailscale SSH tunnel first.
+./start-dgx-tunnel.sh
 
 # 2. Start all services
 docker compose up --build -d
 `
 
-Open http://localhost:3000 in your browser.  
+Open http://localhost:3999 in your browser.
 For complete Docker details and troubleshooting, see [DOCKER.md](DOCKER.md).
 
 ---

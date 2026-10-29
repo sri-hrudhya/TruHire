@@ -6,6 +6,7 @@ import { MetaProvider } from './context/MetaContext';
 
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
+import TruHireAssistant from './components/TruHireAssistant';
 
 import AuthPage from './pages/AuthPage';
 import IngestionPage from './pages/IngestionPage';
@@ -70,6 +71,7 @@ function ProtectedLayout() {
           <Outlet />
         </div>
       </div>
+      <TruHireAssistant />
     </div>
   );
 }

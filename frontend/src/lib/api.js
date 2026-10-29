@@ -139,6 +139,17 @@ export const searchApi = {
   search: (payload) => api.post('/search', payload, { timeout: TIMEOUTS_MS.search }),
 };
 
+export const assistantApi = {
+  listConversations: () => api.get('/assistant/conversations'),
+  getConversation: (id) => api.get(`/assistant/conversations/${id}`),
+  send: (data) => api.post('/assistant/message', data, { timeout: TIMEOUTS_MS.search }),
+  confirmJd: (data) => api.post('/assistant/confirm-jd', data, { timeout: TIMEOUTS_MS.jdFilters }),
+  upload: (formData) => api.post('/assistant/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: TIMEOUTS_MS.jdFilters,
+  }),
+};
+
 export const analyticsApi = {
   getOverview: (positionId = null) => {
     const url = positionId ? `/analytics/overview?position_id=${positionId}` : '/analytics/overview';

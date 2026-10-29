@@ -1,6 +1,6 @@
 # 🐳 Running TruHire with Docker
 
-This guide explains how to run the entire TruHire stack (Frontend, Backend, PostgreSQL, Redis, Qdrant, OpenSearch) in Docker containers with a single command.
+This guide explains how to run the TruHire stack (Frontend, Backend, PostgreSQL, Redis, OpenSearch, and Qdrant Cloud) in Docker containers with a single command.
 
 ---
 
@@ -17,11 +17,16 @@ cp .env.docker.example .env
 ```
 *(On Windows Command Prompt: `copy .env.docker.example .env`)*
 
-Open `.env` and set at least one LLM provider key:
-- **Groq** (fast & free tier): set `GROQ_API_KEY=gsk_...` from [console.groq.com](https://console.groq.com/keys)
-- **OpenRouter**: set `OPENROUTER_API_KEY_1=sk-or-v1-...` from [openrouter.ai](https://openrouter.ai/keys)
-- **Gemini**: set `GEMINI_API_KEY_1=...` from [aistudio.google.com](https://aistudio.google.com/)
-- **Local Ollama**: set `VLLM_BASE_URL=http://host.docker.internal:11434/v1` and `VLLM_MODEL=llama3.1:latest`
+Open `.env` and configure the DGX/vLLM endpoint. TruHire uses DGX only;
+OpenRouter, Groq, and Gemini are not used for chat.
+
+Start the Tailscale SSH tunnel from the host before starting Docker:
+```bash
+./start-dgx-tunnel.sh
+```
+
+The Docker backend reaches that host tunnel through
+`http://host.docker.internal:8000/v1`.
 
 > **Note on Embeddings:** Local embeddings (`BAAI/bge-base-en-v1.5`) run in-process inside the backend container using `fastembed`. No external embedding API key is needed!
 
