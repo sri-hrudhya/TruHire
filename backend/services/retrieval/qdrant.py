@@ -222,7 +222,7 @@ def search_vectors(query_vector: List[float], top_k: int = 20, filters: SearchFi
     client = _client()
     response = client.post(
         _url(f"/collections/{settings.QDRANT_COLLECTION}/points/search"),
-        headers=_headers(), json=body
+        headers=_headers(), json=body, timeout=settings.SEARCH_VECTOR_TIMEOUT
     )
     response.raise_for_status()
     data = response.json()

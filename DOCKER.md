@@ -28,7 +28,7 @@ Start the Tailscale SSH tunnel from the host before starting Docker:
 The Docker backend reaches that host tunnel through
 `http://host.docker.internal:8000/v1`.
 
-> **Note on Embeddings:** Local embeddings (`BAAI/bge-base-en-v1.5`) run in-process inside the backend container using `fastembed`. No external embedding API key is needed!
+> **Note on Embeddings:** Local embeddings (`BAAI/bge-base-en-v1.5`) run in-process inside the backend container using `fastembed`. No external embedding API key is needed. The CPU BGE cross-encoder reranker is disabled by default for responsive interactive search; set `RERANKER_ENABLED=true` only when slower reranking is acceptable.
 
 > **Note on Laya:** Laya is disabled by default in Docker because its optional Torch dependency downloads several gigabytes of CUDA packages. Set `LAYA_ENABLED=true` only when you have installed the `laya` extra and want to run the local decision model.
 
@@ -104,6 +104,14 @@ Once all containers are up:
 
 ## 🛠️ Management & Commands
 
+### View Running Containers and Published Ports
+```bash
+docker compose ps
+```
+
+The startup scripts run this automatically after the stack starts. The output
+shows each service, its running state, and host-to-container port mappings.
+
 ### View Live Logs
 ```bash
 # All services
@@ -161,4 +169,4 @@ sudo sysctl -w vm.max_map_count=262144
 To make it permanent, add `vm.max_map_count=262144` to `/etc/sysctl.conf`.
 
 ### 3. Model Downloads & Persistent Cache
-On first startup, the backend downloads the lightweight sentence embedding model (`bge-base-en-v1.5`) and reranker model into the persistent volume `model_cache`. These are cached permanently so subsequent restarts happen in ~5 seconds.
+On first startup, the backend downloads the lightweight sentence embedding model (`bge-base-en-v1.5`) into the persistent volume `model_cache`. If `RERANKER_ENABLED=true`, it also downloads the BGE reranker model. These are cached permanently.

@@ -112,6 +112,7 @@ class Settings(BaseSettings):
     # Interactive search returns deterministic hybrid scores immediately. The
     # DGX fit reranker can be enabled when slower model-based refinement is desired.
     SEARCH_LLM_RERANK_ENABLED: bool = False
+    SEARCH_VECTOR_TIMEOUT: float = 8.0
 
     # Cross-encoder reranker (BGE) applied to the best-matching chunk of each shortlisted
     # candidate. Runs in-process via fastembed/ONNX on CPU; if the model cannot load the
@@ -163,7 +164,7 @@ class Settings(BaseSettings):
     HYBRID_VECTOR_WEIGHT: float = 0.60
     HYBRID_LEXICAL_WEIGHT: float = 0.40
     HYBRID_RRF_K: int = 60
-    SEARCH_CANDIDATE_MULTIPLIER: int = 5
+    SEARCH_CANDIDATE_MULTIPLIER: int = 3
 
     SEMANTIC_WEIGHT: float = 0.60
     SKILL_WEIGHT: float = 0.40

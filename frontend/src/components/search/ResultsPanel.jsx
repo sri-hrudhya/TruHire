@@ -22,7 +22,12 @@ export default function ResultsPanel({ s, onPreview }) {
       )}
       {results?.warnings?.length > 0 && <Notice type="warning">{results.warnings.join(' ')}</Notice>}
 
-      {view === 'loading' && <p className="req-empty"><Loader2 size={18} className="animate-spin" /> Scoring candidates…</p>}
+      {view === 'loading' && (
+        <div className="search-loading" role="status" aria-label="Searching candidates">
+          <Loader2 className="search-loading-spinner" size={28} aria-hidden="true" />
+          <div><strong>Finding the best candidates</strong><span>Searching resumes and ranking matches…</span></div>
+        </div>
+      )}
       {view === 'results' && (
         <ul className="match-list">
           {results.results.map((item) => (

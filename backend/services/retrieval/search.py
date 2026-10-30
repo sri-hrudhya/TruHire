@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Dict, Any, List, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from backend.config import settings
@@ -268,18 +269,43 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
     else:
         retrieval_text = " ".join(active_skills) or ad_hoc_text
     lexical_query = retrieval_text
-    vector = generate_embedding(retrieval_text)
+    # Keep lexical search responsive when the local embedding model is cold or
+    # overloaded. The vector task may finish later, but it must not block results.
+    vector = None
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(generate_embedding, retrieval_text)
+    try:
+        vector = future.result(timeout=settings.SEARCH_VECTOR_TIMEOUT)
+    except FuturesTimeoutError:
+        logger.warning("search embedding exceeded %.1fs; continuing with lexical retrieval", settings.SEARCH_VECTOR_TIMEOUT)
+    except Exception as exc:
+        logger.warning("search embedding unavailable; continuing with lexical retrieval: %s", exc)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     if base_position:
         jd_skills = extract_skills_from_jd(base_position.jd_text)
         jd_skills = list(dict.fromkeys(jd_skills + active_skills))
     else:
         jd_skills = active_skills
 
-    candidate_limit = min(max(limit * settings.SEARCH_CANDIDATE_MULTIPLIER, 50), 500)
-    vector_rows = search_vectors(vector, candidate_limit, filters) if vector else []
-    # Skill chips are enforced below with text-aware matching; a hard OpenSearch keyword filter on the
-    # parsed skills list would drop candidates whose resume has the skill but whose parse missed it.
-    lexical_rows = search_lexical(lexical_query, candidate_limit, None, min_experience, filters)
+    candidate_limit = min(max(limit * settings.SEARCH_CANDIDATE_MULTIPLIER, limit), 500)
+    pool = ThreadPoolExecutor(max_workers=2)
+    vector_future = pool.submit(search_vectors, vector, candidate_limit, filters) if vector else None
+    lexical_future = pool.submit(search_lexical, lexical_query, candidate_limit, None, min_experience, filters)
+    try:
+        vector_rows = vector_future.result(timeout=settings.SEARCH_VECTOR_TIMEOUT) if vector_future else []
+    except Exception as exc:
+        logger.warning("vector retrieval unavailable; continuing with lexical retrieval: %s", exc)
+        vector_rows = []
+    try:
+        # Skill chips are enforced below with text-aware matching; a hard OpenSearch keyword
+        # filter would drop candidates whose resume parser missed a skill.
+        lexical_rows = lexical_future.result(timeout=settings.SEARCH_VECTOR_TIMEOUT)
+    except Exception as exc:
+        logger.warning("lexical retrieval unavailable; continuing with vector retrieval: %s", exc)
+        lexical_rows = []
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     fused = _rrf([("vector", vector_rows), ("lexical", lexical_rows)], candidate_limit)
     _normalize_lexical_scores(fused)
 

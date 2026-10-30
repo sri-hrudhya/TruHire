@@ -15,7 +15,7 @@ export const STORAGE_KEYS = Object.freeze({
 export const TIMEOUTS_MS = Object.freeze({
   default: 30_000,
   scoring: 180_000,     // scoring a requirement can include a cold model start
-  search: 300_000,      // reranking and Laya scoring run on the local machine and can take minutes on a CPU
+  search: 45_000,
   emailDraft: 180_000,  // one LLM call per candidate
   emailSend: 120_000,
   jdFilters: 60_000,
