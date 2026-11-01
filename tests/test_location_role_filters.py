@@ -8,10 +8,6 @@ the PostgreSQL check - not the index pre-filter - is what guarantees eligibility
 import uuid
 from datetime import datetime
 
-<<<<<<< HEAD
-import httpx
-=======
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
 import pytest
 from fastapi.testclient import TestClient
 
@@ -113,8 +109,6 @@ def test_index_query_fragments():
     assert F.qdrant_filter(F.NO_FILTERS) is None and F.opensearch_filters(F.NO_FILTERS) == []
 
 
-<<<<<<< HEAD
-=======
 def test_several_locations_match_any_and_share_one_cache_key_regardless_of_order():
     f = F.build_filters(["Pune", "Bangalore", "pune"], None)
     assert f.location_keys == ("pune", "bengaluru") and f.location_key == "pune" and f.location == "Pune, Bangalore, pune"
@@ -130,7 +124,6 @@ def test_several_locations_match_any_and_share_one_cache_key_regardless_of_order
         F.build_filters([f"City{i}" for i in range(F.MAX_LOCATION_FILTERS + 1)], None)
 
 
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
 def test_index_payload_fields_only_contain_stated_facts():
     assert F.index_payload_fields(None, None) == {"location": "", "location_keys": [], "job_titles": [], "role_tokens": []}
     p = F.index_payload_fields("Pune, India", ["Senior Backend Developer", "QA Analyst"])
@@ -167,24 +160,13 @@ def test_qdrant_search_sends_filter_before_top_k(monkeypatch):
         def json(self): return {"result": [{"id": "1", "score": 0.9, "payload": {"candidate_id": "c1", "chunk_index": 0}}]}
 
     class FakeHttp:
-<<<<<<< HEAD
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def post(self, url, headers=None, json=None):
-=======
         def post(self, url, headers=None, json=None, timeout=None):
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
             seen["body"] = json
             return FakeResponse()
 
     monkeypatch.setattr(qdrant, "collection_exists", lambda: True)
     monkeypatch.setattr(qdrant, "_ensure_filter_indexes_once", lambda: None)
-<<<<<<< HEAD
-    monkeypatch.setattr(httpx, "Client", FakeHttp)
-=======
     monkeypatch.setattr(qdrant, "_client", lambda: FakeHttp())
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     rows = qdrant.search_vectors([0.1], 5, F.build_filters("Pune", None))
     assert seen["body"]["filter"] == {"must": [{"key": "location_keys", "match": {"value": "pune"}}]}
     assert [r["candidate_id"] for r in rows] == ["c1"]
@@ -256,7 +238,7 @@ def env():
     headers = {"Authorization": f"Bearer {create_access_token({'sub': user.id})}"}
     client = TestClient(app)
     tag = uuid.uuid4().hex[:6]
-    cands, jds = [], []
+    cands, jds, cand_ids = [], [], []  # ids kept apart: a test may delete a candidate, and an expired instance cannot be read in teardown
     state_snapshot = db.query(SearchState).filter(SearchState.user_id == user.id).first()
     snapshot = None if state_snapshot is None else {c.name: getattr(state_snapshot, c.name) for c in SearchState.__table__.columns}
 
@@ -272,6 +254,7 @@ def env():
         c.qdrant_point_id = c.id
         c.opensearch_doc_id = c.id
         cands.append(c)
+        cand_ids.append(c.id)
         db.commit()
         return c.id
 
@@ -287,7 +270,7 @@ def env():
 
     for jid in jds:
         client.delete(f"/api/job-descriptions/{jid}", headers=headers)
-    ids = [c.id for c in cands]
+    ids = cand_ids
     db.rollback()
     db.query(CandidateMatch).filter(CandidateMatch.candidate_id.in_(ids)).delete(synchronize_session=False)
     db.query(Candidate).filter(Candidate.id.in_(ids)).delete(synchronize_session=False)
@@ -322,11 +305,6 @@ def retrieval(monkeypatch):
     monkeypatch.setattr(search_module, "search_lexical", lex)
     monkeypatch.setattr(search_module, "extract_skills_from_jd", lambda text: ["Python"])
     monkeypatch.setattr(search_module.decision, "rerank_scores_batch", lambda items: [(s, None) for s, _, _ in items])
-<<<<<<< HEAD
-    monkeypatch.setattr(search_module, "generate_match_summary", lambda *a, **k: ("summary", "", "Requirements"))
-    monkeypatch.setattr(search_module, "check_search_result", lambda *a, **k: type("G", (), {"passed": True})())
-=======
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     return pool
 
 
@@ -487,43 +465,24 @@ def test_api_validates_and_persists_filters_in_search_state(env, retrieval):
     assert body["results"][0]["candidate"]["location"] == city and body["results"][0]["candidate"]["job_titles"] == ["Backend Engineer"]
 
     state = client.get("/api/search/state", headers=headers).json()["state"]
-<<<<<<< HEAD
-    assert state["location"] == city and state["role"] == "Backend Developer" and state["query"] == "python"
-    assert [x["candidate"]["id"] for x in state["results"]] == [a]
-
-    # Clearing the filters is saved too (not stuck on the previous values).
-    client.post("/api/search", headers=headers, json={"query": "python", "location": "", "role": None})
-    state = client.get("/api/search/state", headers=headers).json()["state"]
-    assert state["location"] is None and state["role"] is None
-
-=======
     # The saved results come back, but hard filters are never restored (a forgotten one zeroes later searches).
     assert state["location"] is None and state["role"] is None and state["query"] == "python"
     assert [x["candidate"]["id"] for x in state["results"]] == [a]
 
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     assert client.post("/api/search", headers=headers, json={"query": "python", "location": "!!!"}).status_code == 422
     assert client.post("/api/search", headers=headers, json={"query": "python", "role": "x" * 250}).status_code == 422
     assert client.post("/api/search", headers=headers, json={"query": "python", "location": ["Pune"]}).status_code == 422
     assert client.post("/api/search", headers=headers, json={}).status_code == 422
 
 
-<<<<<<< HEAD
-def test_filter_only_saved_search_is_restored(env, retrieval):
-=======
 def test_filter_only_saved_search_is_not_restored(env, retrieval):
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
     client, headers = env["client"], env["headers"]
     city = env["city"]("Pune")
     env["make"](city)
     assert client.post("/api/search", headers=headers, json={"location": city}).status_code == 200
     state = client.get("/api/search/state", headers=headers).json()["state"]
-<<<<<<< HEAD
-    assert state is not None and state["location"] == city
-=======
     # A filter-only search has nothing else to restore, and hard filters are never restored.
     assert state is None
->>>>>>> 71a313da09018fd7181ca1417fea9d3d5411898b
 
 
 # --- JD-derived defaults -------------------------------------------------------------------------------

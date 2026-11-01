@@ -35,7 +35,8 @@ run('detailsPayload turns blanks into null and trims text', () => {
 run('positions and locations: validation and display', () => {
   assert.equal(validateDetails({ noOfPositions: '2', locations: ['Pune'] }), null);
   assert.equal(validateDetails({ noOfPositions: '' }), null);
-  for (const bad of ['0', '-1', '1.5', 'abc']) assert.match(validateDetails({ noOfPositions: bad }), /No\. of positions/);
+  assert.equal(validateDetails({ noOfPositions: '0' }), null);  // 0 is allowed (the backend accepts 0 to MAX)
+  for (const bad of ['-1', '1.5', 'abc']) assert.match(validateDetails({ noOfPositions: bad }), /No\. of positions/);
   assert.match(validateDetails({ locations: Array.from({ length: 11 }, (_, i) => `P${i}`) }), /at most 10/i);
   assert.deepEqual(jdLocations({ locations: ['Pune', 'Mumbai'], location: 'Pune; Mumbai' }), ['Pune', 'Mumbai']);
   assert.deepEqual(jdLocations({ location: 'Chennai' }), ['Chennai']);  // a demand saved before several places were allowed

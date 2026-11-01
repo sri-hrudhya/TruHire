@@ -14,7 +14,7 @@ def users(env):
     db, made = env["db"], []
 
     def make(role):
-        u = User(email=f"{role}.{uuid.uuid4().hex[:8]}@truhire.test", name=f"{role} user",
+        u = User(email=f"{role}.{uuid.uuid4().hex[:8]}@truhire.com", name=f"{role} user",
                  hashed_password=get_password_hash("pass12345"), role=role)
         db.add(u)
         db.commit()
@@ -37,14 +37,14 @@ def _forget(env, email):
 
 
 def test_register_defaults_to_recruiter(env):
-    email = f"plain.{uuid.uuid4().hex[:8]}@truhire.test"
+    email = f"plain.{uuid.uuid4().hex[:8]}@truhire.com"
     r = _register(env, email)
     assert r.status_code == 200 and r.json()["user"]["role"] == ROLE_RECRUITER
     _forget(env, email)
 
 
 def test_bootstrap_admin_email_gets_admin(env, monkeypatch):
-    email = f"boss.{uuid.uuid4().hex[:8]}@truhire.test"
+    email = f"boss.{uuid.uuid4().hex[:8]}@truhire.com"
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_EMAILS", f"someone@else.com, {email.upper()}")
     r = _register(env, email)
     assert r.status_code == 200 and r.json()["user"]["role"] == ROLE_ADMIN

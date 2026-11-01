@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -13,10 +14,13 @@ from backend.models import Conversation, ConversationMessage, DEFAULT_DEMAND_NAM
 from backend.routers.ingestion import process_batch
 from backend.routers.job_descriptions import PositionCreateRequest, create_jd
 from backend.services.classification import classify_jd_detailed
+from backend.services.ingestion.doc_kind import detect_document_kind
 from backend.services.ingestion.parsing import extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import save_upload_file
 from backend.services.llm.ai_service import untrusted
-from backend.services.llm.router import chat_completion
+from backend.services.llm.router import chat_completion, chat_completion_stream
+from backend.services.llm.scope import REFUSAL, SCOPE_RULE, is_in_scope
+from backend.services.common import ai_audit
 from backend.services.retrieval.search import execute_candidate_search
 
 logger = logging.getLogger(__name__)
@@ -113,7 +117,7 @@ def _json_reply(messages: List[Dict[str, str]]) -> str:
         return ""
 
 
-def _generic_reply(db: Session, request: AssistantMessageRequest, conversation: Conversation) -> str:
+def _generic_messages(db: Session, request: AssistantMessageRequest, conversation: Conversation) -> List[Dict[str, str]]:
     history = [
         {"role": m.role, "content": m.content}
         for m in conversation.messages[-8:]
@@ -125,10 +129,28 @@ def _generic_reply(db: Session, request: AssistantMessageRequest, conversation: 
         "You are the TruHire recruitment assistant. Help with resumes, demand documents, candidate matching, "
         "and email drafting. Never invent candidate facts. If the user asks to create a demand, ask for a fixed demand "
         "choice instead of creating it automatically. Keep answers concise and actionable.\n"
+        f"{SCOPE_RULE}\n"
         f"Available requirements: {context}\n"
         f"User request: {untrusted('user_request', request.message)}"
     )
-    reply = _json_reply([{"role": "system", "content": prompt}, *history])
+    return [{"role": "system", "content": prompt}, *history]
+
+
+_FALLBACK_REPLY = "I can ingest resumes or a demand document, create a demand after you choose its category, find the top candidates for a requirement, or prepare demand-grounded email drafts."
+
+
+def _out_of_scope(request: AssistantMessageRequest, conversation: Conversation) -> bool:
+    """Topic guardrail: True (and audited) when the message is not about TruHire or recruitment."""
+    recent = [m.content for m in conversation.messages[-6:-1] if m.role == "user"]  # the last entry is the message being answered
+    if is_in_scope(request.message, recent):
+        return False
+    ai_audit.record(provider="guardrail", status="blocked", feature="assistant_scope", prompt=request.message,
+                    details={"check": "assistant_scope"})
+    return True
+
+
+def _generic_reply(db: Session, request: AssistantMessageRequest, conversation: Conversation) -> str:
+    reply = _json_reply(_generic_messages(db, request, conversation))
     return reply or "I can ingest resumes or a demand document, create a demand after you choose its category, find the top candidates for a requirement, or prepare demand-grounded email drafts."
 
 
@@ -152,14 +174,9 @@ def get_conversation(conversation_id: str, db: Session = Depends(get_db), user: 
     }
 
 
-@router.post("/message")
-def assistant_message(
-    request: AssistantMessageRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    conversation = _conversation(db, user, request.conversation_id)
-    _save_message(db, conversation, "user", request.message)
+def _route_message(db: Session, request: AssistantMessageRequest) -> Optional[tuple]:
+    """Deterministic assistant actions. Returns (reply, data), or None when the message is a free-text
+    question that needs the LLM."""
     lower = request.message.lower()
 
     if any(term in lower for term in ("show candidates", "find candidates", "candidate matches", "matching candidates", "top candidates")):
@@ -180,7 +197,14 @@ def assistant_message(
         else:
             reply = f"I selected {position.display_id} · {position.title}. Open Email to review demand-grounded drafts; nothing will be sent automatically."
             data = {"action": "email", "position_id": position.id, "position": {"display_id": position.display_id, "title": position.title}}
-    elif len(request.message) > 180 or "job description" in lower or "create a jd" in lower or "create demand" in lower:
+    elif len(request.message) > 180 and detect_document_kind("", request.message) == "resume" and not any(
+        phrase in lower for phrase in ("job description", "create a jd", "create demand")
+    ):
+        reply = "This looks like a resume. Attach the file with the paperclip and I will ingest it; I do not create demands from resumes."
+        data = {"action": "reply"}
+    elif "job description" in lower or "create a jd" in lower or "create demand" in lower or (
+        len(request.message) > 180 and is_in_scope(request.message)
+    ):
         title = next((line.strip() for line in request.message.splitlines() if line.strip()), "Uploaded Job Description")[:200]
         classification = classify_jd_detailed(title, request.message)
         reply = "I read the demand document. Before I create it, choose exactly one demand category. I will not auto-assign it."
@@ -191,13 +215,81 @@ def assistant_message(
             "demands": [{"id": canonical_demand_id(name), "name": name} for name in DEFAULT_DEMAND_NAMES],
         }
     else:
-        reply = _generic_reply(db, request, conversation)
-        data = {"action": "reply"}
+        return None  # free-text question for the LLM
+    return reply, data
 
+
+
+def _finish(db: Session, conversation: Conversation, reply: str, data: dict) -> dict:
     _save_message(db, conversation, "assistant", reply, data)
     conversation.updated_at = __import__("datetime").datetime.utcnow()
     db.commit()
     return {"conversation_id": conversation.id, "reply": reply, **data}
+
+
+@router.post("/message")
+def assistant_message(
+    request: AssistantMessageRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conversation = _conversation(db, user, request.conversation_id)
+    _save_message(db, conversation, "user", request.message)
+    routed = _route_message(db, request)
+    if routed is None and _out_of_scope(request, conversation):
+        routed = (REFUSAL, {"action": "reply"})
+    if routed is None:
+        routed = (_generic_reply(db, request, conversation), {"action": "reply"})
+    return _finish(db, conversation, *routed)
+
+
+def _sse(event: str, payload: dict) -> str:
+    return f"event: {event}" + chr(10) + "data: " + json.dumps(payload, ensure_ascii=False, default=str) + chr(10) * 2
+
+
+@router.post("/message/stream")
+def assistant_message_stream(
+    request: AssistantMessageRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Same as /message, but a free-text answer is sent as Server-Sent Events while the model writes it:
+    `token` events carry text pieces, then one `done` event carries the final payload (same shape as
+    /message). Deterministic actions skip straight to `done`. A failure after text has started arrives
+    as an `error` event; the partial text is still saved."""
+    conversation = _conversation(db, user, request.conversation_id)
+    conversation_id = conversation.id
+    _save_message(db, conversation, "user", request.message)
+    routed = _route_message(db, request)
+    if routed is None and _out_of_scope(request, conversation):
+        routed = (REFUSAL, {"action": "reply"})
+    if routed is not None:
+        done = _finish(db, conversation, *routed)
+        return StreamingResponse(iter([_sse("done", done)]), media_type="text/event-stream")
+    db.commit()
+    messages = _generic_messages(db, request, conversation)
+
+    def events():
+        parts: List[str] = []
+        failed = False
+        try:
+            for piece in chat_completion_stream(messages, temperature=0.1, max_tokens=700, enable_thinking=False):
+                parts.append(piece)
+                yield _sse("token", {"text": piece})
+        except Exception as exc:
+            failed = True
+            logger.warning("Assistant streaming failed: %s", exc)
+        reply = "".join(parts).strip()
+        if not reply:
+            reply = _FALLBACK_REPLY
+        elif failed:
+            yield _sse("error", {"detail": "The answer was interrupted."})
+        # The request session is closed once the response starts, so save with a fresh one.
+        with SessionLocal() as save_db:
+            conv = save_db.get(Conversation, conversation_id)
+            yield _sse("done", _finish(save_db, conv, reply, {"action": "reply"}))
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/confirm-jd")
@@ -235,11 +327,20 @@ async def assistant_upload(
         raise HTTPException(422, "kind must be auto, jd, or resume.")
     conversation = _conversation(db, user, conversation_id)
     _save_message(db, conversation, "user", f"Uploaded demand/resume file: {filename}")
-    is_jd = kind == "jd" or (kind == "auto" and "jd" in filename.lower())
-    if is_jd:
+    text = None
+    if kind == "auto":
+        # No choice needed from the user: read the document and decide from its content.
+        kind = "resume"
+        if is_supported_jd_file(filename):
+            try:
+                text = extract_text_from_file(filename, content).strip()
+                kind = detect_document_kind(filename, text)
+            except Exception as exc:
+                logger.info("Document type detection fell back to resume for %s: %s", filename, exc)
+    if kind == "jd":
         if not is_supported_jd_file(filename):
             raise HTTPException(400, "Unsupported demand document type.")
-        text = extract_text_from_file(filename, content).strip()
+        text = text if text is not None else extract_text_from_file(filename, content).strip()
         if not text:
             raise HTTPException(400, "No readable text found in the uploaded demand document.")
         file_url, _ = save_upload_file(filename, content, category="job_descriptions")

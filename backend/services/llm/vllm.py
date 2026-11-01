@@ -35,12 +35,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
 
 from backend.config import settings
 from backend.services.common import ai_audit
+from backend.services.llm.errors import TransientLLMError
+from backend.services.llm.streaming import iter_text_deltas, raise_for_stream_status
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +478,7 @@ def chat_completion(
     temperature: float = 0.2,
     max_tokens: int = 800,
     enable_thinking: bool = True,
+    timeout: Optional[httpx.Timeout] = None,
 ) -> str:
     """
     Generate a chat completion using the DGX Qwen model.
@@ -510,7 +513,7 @@ def chat_completion(
     prompt_text = "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in messages)
     started = time.perf_counter()
     try:
-        data = _post_chat(endpoint, model, payload)
+        data = _post_chat(endpoint, model, payload) if timeout is None else _post_chat(endpoint, model, payload, timeout=timeout)
     except Exception as exc:
         ai_audit.record(provider="vllm", model=model, status="error", prompt=prompt_text,
                         latency_ms=(time.perf_counter() - started) * 1000, error=str(exc))
@@ -538,7 +541,7 @@ def chat_completion(
     return content
 
 
-def _post_chat(endpoint: str, model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _post_chat(endpoint: str, model: str, payload: Dict[str, Any], timeout: Optional[httpx.Timeout] = None) -> Dict[str, Any]:
     """HTTP round trip to the vLLM chat endpoint; returns the decoded JSON body."""
     headers = _headers(
         _vllm_api_key()
@@ -546,7 +549,7 @@ def _post_chat(endpoint: str, model: str, payload: Dict[str, Any]) -> Dict[str, 
 
     try:
         with httpx.Client(
-            timeout=settings.VLLM_TIMEOUT
+            timeout=settings.VLLM_TIMEOUT if timeout is None else timeout
         ) as client:
 
             response = client.post(
@@ -556,13 +559,13 @@ def _post_chat(endpoint: str, model: str, payload: Dict[str, Any]) -> Dict[str, 
             )
 
     except httpx.ConnectError as exc:
-        raise RuntimeError(
+        raise TransientLLMError(
             "Could not connect to DGX vLLM.\n"
             f"Endpoint: {endpoint}"
         ) from exc
 
     except httpx.TimeoutException as exc:
-        raise RuntimeError(
+        raise TransientLLMError(
             "DGX vLLM chat request timed out.\n"
             f"Endpoint: {endpoint}"
             f"\nModel: {model}"
@@ -576,7 +579,7 @@ def _post_chat(endpoint: str, model: str, payload: Dict[str, Any]) -> Dict[str, 
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
+        raise (TransientLLMError if response.status_code >= 500 or response.status_code == 429 else RuntimeError)(
             f"DGX vLLM returned "
             f"{response.status_code}: "
             f"{response.text}"
@@ -591,3 +594,55 @@ def _post_chat(endpoint: str, model: str, payload: Dict[str, Any]) -> Dict[str, 
         ) from exc
 
     return data
+
+def chat_completion_stream(
+    messages: List[Dict[str, str]],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int = 800,
+    enable_thinking: bool = True,
+    timeout: Optional[httpx.Timeout] = None,
+) -> Iterator[str]:
+    """Same request as chat_completion, but yields the reply in pieces as the DGX produces them.
+
+    A connection failure, timeout or 5xx before the first piece raises TransientLLMError (the router
+    then tries the cloud providers); `timeout`'s read value bounds the wait for each piece."""
+    if not messages:
+        raise ValueError("messages cannot be empty.")
+    model = resolve_chat_model()
+    payload: Dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature,
+                               "max_tokens": max_tokens, "stream": True}
+    if not enable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    endpoint = f"{_vllm_base_url()}/chat/completions"
+    prompt_text = "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in messages)
+    started = time.perf_counter()
+    parts: List[str] = []
+    try:
+        with httpx.Client(timeout=settings.VLLM_TIMEOUT if timeout is None else timeout) as client:
+            with client.stream("POST", endpoint, headers=_headers(_vllm_api_key()), json=payload) as response:
+                raise_for_stream_status(response, "DGX vLLM")
+                for piece in iter_text_deltas(response):
+                    parts.append(piece)
+                    yield piece
+    except httpx.ConnectError as exc:
+        err: Exception = TransientLLMError(f"Could not connect to DGX vLLM.\nEndpoint: {endpoint}")
+        err.__cause__ = exc
+    except httpx.TimeoutException as exc:
+        err = TransientLLMError(f"DGX vLLM chat stream timed out.\nEndpoint: {endpoint}\nModel: {model}")
+        err.__cause__ = exc
+    except httpx.HTTPError as exc:
+        err = RuntimeError(f"DGX vLLM stream failed: {exc}")
+        err.__cause__ = exc
+    except Exception as exc:
+        ai_audit.record(provider="vllm", model=model, status="error", prompt=prompt_text,
+                        latency_ms=(time.perf_counter() - started) * 1000, error=str(exc), output="".join(parts) or None)
+        raise
+    else:
+        ai_audit.record(provider="vllm", model=model, prompt=prompt_text, output="".join(parts),
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                        details={"streamed": True, "temperature": temperature, "max_tokens": max_tokens})
+        return
+    ai_audit.record(provider="vllm", model=model, status="error", prompt=prompt_text,
+                    latency_ms=(time.perf_counter() - started) * 1000, error=str(err), output="".join(parts) or None)
+    raise err

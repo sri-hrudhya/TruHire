@@ -84,7 +84,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${BACKEND_PORT:-8999}:8999"
-    environment:
+    environment: &backend-env
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-truhire}:${POSTGRES_PASSWORD:-truhire_secret}@postgres:5432/${POSTGRES_DB:-truhire}
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
@@ -114,6 +114,25 @@ services:
       GUARDRAILS_ENFORCE: ${GUARDRAILS_ENFORCE:-true}
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
       BOOTSTRAP_ADMIN_EMAILS: ${BOOTSTRAP_ADMIN_EMAILS:-}
+      # Ingestion queue: handled by the `worker` service below (set USE_ARQ_QUEUE=false to run in-process).
+      USE_ARQ_QUEUE: ${USE_ARQ_QUEUE:-true}
+      # Chat fallback when the DGX is down: OpenRouter -> Groq -> Gemini, every key tried (see backend/services/llm/router.py).
+      OPENROUTER_API_KEY_1: ${OPENROUTER_API_KEY_1:-}
+      OPENROUTER_API_KEY_2: ${OPENROUTER_API_KEY_2:-}
+      OPENROUTER_API_KEY_3: ${OPENROUTER_API_KEY_3:-}
+      GROQ_API_KEY_1: ${GROQ_API_KEY_1:-}
+      GROQ_API_KEY_2: ${GROQ_API_KEY_2:-}
+      GROQ_API_KEY_3: ${GROQ_API_KEY_3:-}
+      GEMINI_API_KEY_1: ${GEMINI_API_KEY_1:-}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:-}
+      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3:-}
+      OPENROUTER_CHAT_MODEL: ${OPENROUTER_CHAT_MODEL:-openai/gpt-4o-mini}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.0-flash-lite}
+      LLM_TOTAL_TIMEOUT: ${LLM_TOTAL_TIMEOUT:-60}
+      LLM_VLLM_CHAT_TIMEOUT: ${LLM_VLLM_CHAT_TIMEOUT:-30}
+      LLM_CLOUD_KEY_TIMEOUT: ${LLM_CLOUD_KEY_TIMEOUT:-15}
+      LLM_CLOUD_REDACT_PII: ${LLM_CLOUD_REDACT_PII:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -127,6 +146,38 @@ services:
         condition: service_healthy
       opensearch:
         condition: service_healthy
+    networks:
+      - truhire-network
+    restart: unless-stopped
+
+  # Background ingestion worker (arq). Same image and settings as the API, no published port.
+  # It must share the uploads volume with the API: queued jobs read the uploaded files from it.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["arq", "backend.worker.WorkerSettings"]
+    environment: *backend-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - uploads_data:/app/uploads
+      - logs_data:/app/logs
+      - model_cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "arq", "--check", "backend.worker.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 120s
     networks:
       - truhire-network
     restart: unless-stopped

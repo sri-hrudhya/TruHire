@@ -85,3 +85,30 @@ Top-level file-type counts: py 85, jsx 51, js 16, css 11, sh 10, md 10, ps1 9, m
 
 ## 8. Confirmation
 No application source, manifests, lockfiles, or runtime data were modified. The only file created is this report.
+
+---
+
+## Addendum — validation run on branch `test` (2026-11-01)
+Branch `test` @ `89985cd`, working tree clean at start. Env: Windows venv `.venv-win` (CPython 3.13.5, `uv sync --frozen`, lockfile untouched); Postgres 17.4 on 127.0.0.1:5432 (native Windows), tests used isolated `truhire_test` DB. To avoid touching real external services, the run overrode `QDRANT_URL` (`.env` points to a **cloud Qdrant**), `QDRANT_API_KEY` and `OPENSEARCH_URL` to unreachable local values. No `.env` values printed.
+
+| Check | Result |
+|---|---|
+| `docker compose config -q` (WSL Ubuntu, Compose v5.6.1) | **PASS** (exit 0) |
+| `pytest` (full, as configured) | **FAIL at collection**: 7 files error out (see below) |
+| `pytest` excluding the 7 blocked files | **131 passed, 3 failed** (92 s) |
+
+### Finding A — committed merge-conflict markers (confirmed)
+`tests/test_location_role_filters.py` (8 conflict blocks, e.g. lines 11-14, 116-133, 490-526) and `tests/test_requirement_status_and_email_history.py` (lines 54-58) contain `<<<<<<< HEAD` / `>>>>>>> 71a313da…` markers → SyntaxError. Five more files (`test_meta`, `test_reviews`, `test_roles`, `test_search_category`, `test_search_zero_results`) fail collection only because they import helpers from `test_location_role_filters`. No markers in `backend/` or `frontend/`. So **7 of 19 test files (≈37%) currently do not run**. Not fixed (read-only phase; needs approval).
+
+### Finding B — 3 failing tests (pre-existing on this commit; cause not yet diagnosed)
+All in `tests/test_requirement_history_and_notice.py`:
+- `test_several_locations_and_number_of_positions`: `no_of_positions` is `None`, expected 1.
+- `test_single_location_clients_still_work_and_bad_values_are_rejected`: `no_of_positions: 0` returns 200, expected 422.
+- `test_history_records_create_update_status_delete_newest_first`: `PUT /api/job-descriptions/{id}/status` with `{"status":"Fulfilled"}` returns 422.
+Hypothesis (unverified): the same unmerged conflict left tests and router/schema code out of sync on `no_of_positions` and status payload. Investigate in Phase 2.
+
+### Updated limitations
+- Python tests in the 7 blocked files are untested; real pass rate unknown.
+- Browser E2E not run; lint/type-check still not configured.
+- `.env` Qdrant is a cloud instance (resolves the earlier "Qdrant not in compose" ambiguity: external managed Qdrant).
+- Application files unchanged; only this report edited. `.venv-win` is untracked-local (uv adds its own ignore).

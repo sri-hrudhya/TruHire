@@ -87,9 +87,9 @@ def test_several_locations_and_number_of_positions(ctx):
     assert jd["locations"] == ["Pune", "Mumbai"] and jd["location"] == "Pune; Mumbai" and jd["no_of_positions"] == 4
     listed = _listed(client, headers, jd["id"])
     assert listed["locations"] == ["Pune", "Mumbai"] and listed["no_of_positions"] == 4
-    # Omitting the count on create means one position; locations can be replaced, cleared and recorded in history.
+    # Omitting the count on create leaves it unset (the form pre-fills 1); locations can be replaced, cleared and recorded in history.
     plain = _create(client, headers, created)
-    assert plain["no_of_positions"] == 1 and plain["locations"] == []
+    assert plain["no_of_positions"] is None and plain["locations"] == []
     res = client.put(f"/api/job-descriptions/{jd['id']}", json={"locations": ["Chennai"], "no_of_positions": 2}, headers=headers)
     assert res.json()["locations"] == ["Chennai"] and res.json()["location"] == "Chennai" and res.json()["no_of_positions"] == 2
     assert client.put(f"/api/job-descriptions/{jd['id']}", json={"locations": []}, headers=headers).json()["locations"] == []
@@ -102,7 +102,7 @@ def test_single_location_clients_still_work_and_bad_values_are_rejected(ctx):
     jd = _create(client, headers, created, location="Pune")  # the older single-value field
     assert jd["locations"] == ["Pune"] and jd["location"] == "Pune"
     assert client.put(f"/api/job-descriptions/{jd['id']}", json={"location": "Mumbai"}, headers=headers).json()["locations"] == ["Mumbai"]
-    for bad in ({"no_of_positions": 0}, {"no_of_positions": -2}, {"locations": ["x"] * 11}, {"locations": "Pune"}, {"locations": [1]}):
+    for bad in ({"no_of_positions": -2}, {"locations": [f"city{i}" for i in range(11)]}, {"locations": "Pune"}, {"locations": [1]}):
         res = client.post("/api/job-descriptions", json={"title": "X", "jd_text": "Java developer", **bad}, headers=headers)
         assert res.status_code == 422, bad
 
@@ -137,7 +137,9 @@ def test_history_records_create_update_status_delete_newest_first(ctx):
     client, headers, db, user, created = ctx
     jd = _create(client, headers, created, location="Pune")
     client.put(f"/api/job-descriptions/{jd['id']}", json={"location": "Mumbai", "experience_years": 4}, headers=headers)
-    assert client.put(f"/api/job-descriptions/{jd['id']}/status", json={"status": "Fulfilled"}, headers=headers).json()["status"] == "Fulfilled"
+    cand = _candidate(db, user)  # a Fulfilled demand must name at least one existing resume
+    assert client.put(f"/api/job-descriptions/{jd['id']}/status", json={"status": "Fulfilled"}, headers=headers).status_code == 422
+    assert client.put(f"/api/job-descriptions/{jd['id']}/status", json={"status": "Fulfilled", "candidate_ids": [cand.id]}, headers=headers).json()["status"] == "Fulfilled"
     assert client.put(f"/api/job-descriptions/{jd['id']}/status", json={"status": "Draft"}, headers=headers).status_code == 400
     client.delete(f"/api/job-descriptions/{jd['id']}", headers=headers)
 
@@ -151,6 +153,8 @@ def test_history_records_create_update_status_delete_newest_first(ctx):
     assert all(r["demand_display_id"] == "TRU-DM-01" and r["demand_name"] == "Java" for r in rows)  # Demand ID travels with every entry
     stamps = [r["created_at"] for r in _history(client, headers)]
     assert stamps == sorted(stamps, reverse=True)
+    db.delete(cand)
+    db.commit()
 
 
 def test_noop_save_and_same_status_log_nothing(ctx):

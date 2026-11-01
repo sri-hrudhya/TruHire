@@ -28,6 +28,15 @@
   min-width: 0;
 }
 
+/* Truviq Systems brand mark (black artwork): inverted on the dark theme so it stays visible. */
+.brand-truviq {
+  height: 28px;
+  width: auto;
+  display: block;
+  margin-right: 0.25rem;
+}
+[data-theme='dark'] .brand-truviq { filter: invert(1); }
+
 .logo {
   display: inline-flex;
   align-items: center;
@@ -406,6 +415,7 @@
   .navbar { padding: 0 0.75rem; }
   .navbar-left, .navbar-right { gap: 0.4rem; }
   .account-name { display: none; }
+  .brand-truviq { height: 20px; }
   .account-trigger { padding: 0.25rem; }
   .logo-name { font-size: 1.05rem; }
 

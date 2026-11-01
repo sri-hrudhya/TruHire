@@ -52,11 +52,13 @@ class Settings(BaseSettings):
     # OpenRouter — 1st fallback. Routes to any model via a single API key.
     OPENROUTER_API_KEY_1: Optional[str] = None
     OPENROUTER_API_KEY_2: Optional[str] = None
+    OPENROUTER_API_KEY_3: Optional[str] = None
     OPENROUTER_CHAT_MODEL: str = "openai/gpt-4o-mini"  # override via .env
 
     # Groq — 2nd fallback. Ultra-fast inference for Llama / Mixtral models.
     GROQ_API_KEY_1: Optional[str] = None
     GROQ_API_KEY_2: Optional[str] = None
+    GROQ_API_KEY_3: Optional[str] = None
     GROQ_MODEL: str = "llama-3.1-8b-instant"
 
     # Gemini — 3rd fallback. Three keys for high rate-limit headroom.
@@ -64,6 +66,16 @@ class Settings(BaseSettings):
     GEMINI_API_KEY_2: Optional[str] = None
     GEMINI_API_KEY_3: Optional[str] = None
     GEMINI_CHAT_MODEL: str = "gemini-2.0-flash-lite"  # override via .env
+
+    # Chat latency budget (seconds). vLLM is always tried first; a slow or failing key/provider is skipped.
+    LLM_TOTAL_TIMEOUT: float = 60.0          # hard cap for one chat call across vLLM + every cloud key
+    LLM_CONNECT_TIMEOUT: float = 3.0         # fail fast when the DGX box / a provider is unreachable
+    LLM_VLLM_CHAT_TIMEOUT: float = 30.0      # max wait for the DGX before moving to the cloud chain
+    LLM_CLOUD_KEY_TIMEOUT: float = 15.0      # max wait per cloud API key before trying the next key
+    LLM_KEY_COOLDOWN_SECONDS: float = 20.0   # a key that just failed is tried last for this long
+    LLM_VLLM_BREAKER_FAILURES: int = 2       # consecutive DGX failures before it is skipped
+    LLM_VLLM_BREAKER_COOLDOWN: float = 30.0  # seconds to skip the DGX, then probe it again
+    LLM_CLOUD_REDACT_PII: bool = True        # strip emails/phones/ids before text leaves for a cloud LLM
 
     # Vector database. Required, no default - same reasoning as VLLM_BASE_URL above.
     QDRANT_URL: str

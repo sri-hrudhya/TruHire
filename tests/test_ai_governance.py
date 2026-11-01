@@ -133,7 +133,7 @@ def test_resume_field_validation_bounds_llm_output():
 def test_llm_and_laya_calls_are_audited_with_user_trace_and_feature(auth, monkeypatch):
     client, headers = auth["client"], auth["headers"]
     monkeypatch.setattr(vllm, "resolve_chat_model", lambda: "test-model")
-    monkeypatch.setattr(vllm, "_post_chat", lambda endpoint, model, payload: {
+    monkeypatch.setattr(vllm, "_post_chat", lambda endpoint, model, payload, timeout=None: {
         "choices": [{"message": {"content": "Role Purpose: build platforms"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 120, "completion_tokens": 8},
     })

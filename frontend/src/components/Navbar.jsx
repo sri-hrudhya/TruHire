@@ -15,6 +15,7 @@ export default function Navbar() {
         <Logo />
       </div>
       <div className="navbar-right">
+        <img className="brand-truviq" src="/truviq-block-logo.png" alt="Truviq Systems" />
         <button
           type="button"
           onClick={toggleTheme}

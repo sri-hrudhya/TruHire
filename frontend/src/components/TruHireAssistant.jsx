@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, Check, FileText, Paperclip, Send, Sparkles, Upload, X } from 'lucide-react';
 import { assistantApi } from '../lib/api';
+import { streamAssistantMessage } from '../lib/assistantStream';
 import './truhire-assistant.css';
 
 const GREETING = 'Hi! I can ingest resumes or a demand document, create a requirement after you choose its demand, find the strict top candidates, and prepare email drafts.';
@@ -11,8 +12,8 @@ export default function TruHireAssistant() {
   const [conversationId, setConversationId] = useState(null);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(null);
-  const [kind, setKind] = useState('auto');
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -61,13 +62,32 @@ export default function TruHireAssistant() {
     append({ role: 'user', content: text });
     setInput('');
     setLoading(true);
+    let started = false;
+    const onToken = (piece) => {
+      if (!started) {
+        started = true;
+        setStreaming(true);
+        append({ role: 'assistant', content: piece });
+        return;
+      }
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        return [...current.slice(0, -1), { ...last, content: last.content + piece }];
+      });
+    };
     try {
-      const { data } = await assistantApi.send({ message: text, conversation_id: conversationId });
+      const data = await streamAssistantMessage({ message: text, conversation_id: conversationId }, onToken);
       setConversationId(data.conversation_id);
-      handleResponse(data);
+      if (started) {
+        // The streamed text is already on screen; attach the final payload (actions, results) to it.
+        setMessages((current) => [...current.slice(0, -1), { role: 'assistant', content: data.reply, data }]);
+      } else {
+        handleResponse(data);
+      }
     } catch (error) {
-      append({ role: 'assistant', content: error?.response?.data?.detail || 'I could not complete that request.' });
+      append({ role: 'assistant', content: error?.response?.data?.detail || error?.message || 'I could not complete that request.' });
     } finally {
+      setStreaming(false);
       setLoading(false);
     }
   };
@@ -78,7 +98,6 @@ export default function TruHireAssistant() {
     if (!file || loading) return;
     const form = new FormData();
     form.append('file', file);
-    form.append('kind', kind);
     if (conversationId) form.append('conversation_id', conversationId);
     append({ role: 'user', content: `Uploading “${file.name}”…` });
     setLoading(true);
@@ -132,11 +151,10 @@ export default function TruHireAssistant() {
                 <div>{pending.demands.map((demand) => <button key={demand.id} type="button" onClick={() => chooseDemand(demand.id)} disabled={loading}><Check size={13} />{demand.name}</button>)}</div>
               </div>
             )}
-            {loading && <div className="truhire-assistant-thinking"><Sparkles size={14} /> Working…</div>}
+            {loading && !streaming && <div className="truhire-assistant-thinking"><Sparkles size={14} /> Working…</div>}
             <div ref={endRef} />
           </div>
           <form className="truhire-assistant-composer" onSubmit={send}>
-            <select value={kind} onChange={(event) => setKind(event.target.value)} aria-label="Upload type"><option value="auto">Auto</option><option value="jd">Demand</option><option value="resume">Resume</option></select>
             <label className="truhire-assistant-upload" title="Upload demand or resume"><Paperclip size={17} /><input type="file" onChange={upload} accept=".pdf,.doc,.docx,.rtf,.md,.txt,.csv,.jpg,.jpeg,.png,.webp" /></label>
             <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask about TruHire…" aria-label="Message TruHire Assistant" />
             <button type="submit" className="btn btn-primary" disabled={!input.trim() || loading} aria-label="Send message"><Send size={15} /></button>
