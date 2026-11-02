@@ -15,8 +15,8 @@ const JD_QUESTION_DEFS = [
   { field: 'experience_max_years', reportLabel: 'Maximum experience', label: 'maximum experience', prompt: 'What maximum experience should I use? You can say a number of years or say “skip”.' },
   { field: 'position_count', reportLabel: 'Number of positions', label: 'number of positions', prompt: 'How many people are you hiring for this demand?' },
   { field: 'work_mode', reportLabel: 'Work mode', label: 'work mode', prompt: 'Is this role remote, hybrid, or onsite?' },
-  { field: 'start_date', reportLabel: 'Start date', label: 'start date', prompt: 'What is the start date? You can say a date or say “skip”.' },
-  { field: 'end_date', reportLabel: 'End date', label: 'end date', prompt: 'What is the tentative end date? You can say a date or say “skip”.' },
+  { field: 'start_date', reportLabel: 'Start date', label: 'start date', prompt: 'What should the start date be? Please enter a date, for example 2026-11-15.' },
+  { field: 'end_date', reportLabel: 'End date', label: 'tentative end date', prompt: 'What should the tentative end date be? Please enter a date, for example 2027-05-15.' },
 ];
 
 function readAnswer(field, text) {
@@ -61,7 +61,8 @@ const hasDraftValue = (draft, field) => {
   return value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0);
 };
 const isDateQuestion = (question) => ['start_date', 'end_date'].includes(question?.field);
-const isAnsweredForFlow = (draft, question) => isDateQuestion(question) || hasDraftValue(draft, question.field);
+// Dates must always be confirmed in chat, even when they were extracted from the JD.
+const isAnsweredForFlow = (draft, question) => !isDateQuestion(question) && hasDraftValue(draft, question.field);
 
 function readCorrection(text) {
   const fieldPattern = '(client(?:\\s+name)?|job\\s+title|demand\\s+title|title|role|locations?|work\\s+location|max(?:imum)?\\s+experience|min(?:imum)?\\s+experience|experience|number\\s+of\\s+positions|positions?|work\\s+mode|start\\s+date|end\\s+date)';
@@ -219,6 +220,12 @@ export default function TruHireAssistant() {
       if (!userAlreadyAdded) append({ role: 'user', content: String(answer) });
       const currentDate = pending.draft?.[question.field];
       append({ role: 'assistant', content: `To finish this demand, I still need the ${question.label}. ${isDateQuestion(question) && currentDate ? `The JD lists ${currentDate}. Reply “use it” or enter a different date.` : question.prompt}` });
+      return;
+    }
+    if (answer !== null && isDateQuestion(question) && isSkipAnswer(String(answer))) {
+      if (!userAlreadyAdded) append({ role: 'user', content: String(answer) });
+      append({ role: 'assistant', content: `I need the ${question.label} to create this requirement. Please enter a date.` });
+      askJdQuestion(question, pending.draft);
       return;
     }
     const correction = answer === null ? null : readCorrection(String(answer));
@@ -383,6 +390,13 @@ export default function TruHireAssistant() {
 
   const chooseDemand = async (demandId) => {
     if (!pending?.draft || loading || demandCreateInFlight.current) return;
+    const nextDateIndex = jdQuestions.findIndex((question, index) => index >= jdQuestionIndex && isDateQuestion(question));
+    if (nextDateIndex >= 0) {
+      setJdQuestionIndex(nextDateIndex);
+      append({ role: 'assistant', content: `I need to confirm the ${jdQuestions[nextDateIndex].label} before I create this demand.` });
+      askJdQuestion(jdQuestions[nextDateIndex]);
+      return;
+    }
     demandCreateInFlight.current = true;
     setLoading(true);
     try {

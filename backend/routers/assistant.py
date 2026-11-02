@@ -554,6 +554,13 @@ def assistant_message_stream(
 def confirm_jd(request: AssistantConfirmJDRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if request.demand_id not in {canonical_demand_id(name) for name in DEFAULT_DEMAND_NAMES}:
         raise HTTPException(422, "Choose one of: " + ", ".join(DEFAULT_DEMAND_NAMES) + ".")
+    if request.start_date is None or request.end_date is None:
+        missing = []
+        if request.start_date is None:
+            missing.append("start date")
+        if request.end_date is None:
+            missing.append("tentative end date")
+        raise HTTPException(422, "Please provide the " + " and ".join(missing) + " before creating this requirement.")
     conversation = db.query(Conversation).filter(Conversation.id == request.conversation_id, Conversation.user_id == user.id).first() if request.conversation_id else None
     if request.conversation_id and not conversation:
         raise HTTPException(404, "Assistant conversation not found.")
