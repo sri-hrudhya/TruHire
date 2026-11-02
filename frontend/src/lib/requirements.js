@@ -99,11 +99,15 @@ export const HISTORY_ACTION_LABELS = Object.freeze({
 });
 
 const FIELD_LABELS = {
-  title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Min experience (yrs)', experience_max_years: 'Max experience (yrs)', no_of_positions: 'No. of positions', start_date: 'Start date',
+  title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Min experience (yrs)', experience_max_years: 'Max experience (yrs)', no_of_positions: 'No. of positions', work_mode: 'Work mode', start_date: 'Start date',
   end_date: 'End date', location: 'Location', client_name: 'Client', status: 'Demand status', demand: 'Practice', reason: 'Reason',
   cancellation_reason: 'Cancellation reason', mapped_resumes: 'Resumes',
 };
 const show = (v) => (v === null || v === undefined || v === '' ? 'empty' : String(v));
+const historyValue = (key, value) => {
+  if (key === 'demand' && typeof value === 'string') return value.replace(/^TRU-DM-[0-9]+[^A-Za-z0-9]+/i, '');
+  return show(value);
+};
 
 // One row per changed field: { field, from, to } as display text. 'from' is null for creations, 'to' for deletions.
 export function historyChanges(entry) {
@@ -111,8 +115,8 @@ export function historyChanges(entry) {
     if (!v || typeof v !== 'object' || !('old' in v || 'new' in v)) return { field: FIELD_LABELS[key] || key, from: null, to: show(v) };
     return {
       field: FIELD_LABELS[key] || key,
-      from: entry.action === 'created' ? null : show(v.old),
-      to: entry.action === 'deleted' ? null : show(v.new),
+      from: entry.action === 'created' ? null : historyValue(key, v.old),
+      to: entry.action === 'deleted' ? null : historyValue(key, v.new),
     };
   });
 }

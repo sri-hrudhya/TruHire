@@ -26,7 +26,7 @@ Start the Tailscale SSH tunnel from the host before starting Docker:
 ```
 
 The Docker backend reaches that host tunnel through
-`http://host.docker.internal:8000/v1`.
+`http://host.docker.internal:65432/v1`.
 
 > **Note on Embeddings:** Local embeddings (`BAAI/bge-base-en-v1.5`) run in-process inside the backend container using `fastembed`. No external embedding API key is needed. The CPU BGE cross-encoder reranker is disabled by default for responsive interactive search; set `RERANKER_ENABLED=true` only when slower reranking is acceptable.
 

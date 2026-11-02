@@ -35,14 +35,6 @@ def canonical_demand_id(name: str) -> str:
     return f"default-demand-{name.lower()}"
 
 
-def demand_display_id(demand_id: Optional[str]) -> Optional[str]:
-    """TRU-DM-01..05 for the five fixed demands (their position in DEFAULT_DEMAND_NAMES); None for anything else."""
-    for i, name in enumerate(DEFAULT_DEMAND_NAMES, start=1):
-        if canonical_demand_id(name) == demand_id:
-            return f"TRU-DM-{i:02d}"
-    return None
-
-
 class Demand(Base):
     """A hiring demand that groups related requirements (Positions). Purely organisational: matching,
     scoring and candidate statuses stay per-Position, and a Position may exist without a Demand."""
@@ -278,11 +270,11 @@ class RequirementHistory(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     action = Column(String, nullable=False, index=True)
     item_type = Column(String, nullable=False, default="jd")  # jd | demand
+    source = Column(String, nullable=True)  # requirements UI | assistant | system
     item_id = Column(String, nullable=True, index=True)
     item_display_id = Column(String, nullable=True)
     item_title = Column(String, nullable=True)
     demand_id = Column(String, nullable=True, index=True)
-    demand_display_id = Column(String, nullable=True)
     demand_name = Column(String, nullable=True)
     user_id = Column(String, nullable=True)
     user_name = Column(String, nullable=True)

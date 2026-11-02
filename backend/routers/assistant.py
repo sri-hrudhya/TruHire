@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
@@ -12,16 +13,17 @@ from backend.auth import get_current_user
 from backend.database import SessionLocal, get_db
 from backend.models import Conversation, ConversationMessage, DEFAULT_DEMAND_NAMES, Position, User, canonical_demand_id
 from backend.routers.ingestion import process_batch
-from backend.routers.job_descriptions import PositionCreateRequest, create_jd
+from backend.routers.job_descriptions import JD_FILTER_EXTRACTOR_VERSION, PositionCreateRequest, create_jd
 from backend.services.classification import classify_jd_detailed
 from backend.services.ingestion.doc_kind import detect_document_kind
-from backend.services.ingestion.parsing import extract_text_from_file, is_supported_jd_file
+from backend.services.ingestion.parsing import YEARS_EXP_PATTERN, extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import save_upload_file
 from backend.services.llm.ai_service import untrusted
 from backend.services.llm.router import chat_completion, chat_completion_stream
 from backend.services.llm.scope import REFUSAL, SCOPE_RULE, is_in_scope
 from backend.services.common import ai_audit
 from backend.services.retrieval.search import execute_candidate_search
+from backend.services.retrieval.filters import extract_jd_filters
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
@@ -42,7 +44,14 @@ class AssistantConfirmJDRequest(BaseModel):
     position_count: Optional[int] = Field(default=None, ge=0, le=10000)
     role: Optional[str] = Field(default=None, max_length=200)
     location: Optional[str] = Field(default=None, max_length=2000)
+    locations: Optional[List[str]] = None
     experience_years: Optional[float] = Field(default=None, ge=0, le=60)
+    experience_max_years: Optional[float] = Field(default=None, ge=0, le=60)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    client_name: Optional[str] = Field(default=None, max_length=200)
+    work_mode: Optional[str] = Field(default=None, pattern=r"^(remote|hybrid|onsite)$")
+    conversation_id: Optional[str] = None
     file_url: Optional[str] = None
     original_filename: Optional[str] = None
 
@@ -103,9 +112,222 @@ def _find_position(db: Session, message: str, position_id: Optional[str]) -> Opt
 
 def _position_choices(db: Session) -> List[dict]:
     return [
-        {"id": p.id, "display_id": p.display_id, "title": p.title, "no_of_positions": p.no_of_positions or 1}
+        {"id": p.id, "display_id": p.display_id, "title": p.title, "no_of_positions": p.no_of_positions or 1,
+         "client_name": p.client_name, "demand_id": p.demand_id, "demand_name": p.demand.name if p.demand else None}
         for p in db.query(Position).order_by(Position.created_at.desc()).limit(50).all()
     ]
+
+
+def _client_demand_action(db: Session, message: str) -> Optional[tuple]:
+    lower = message.lower()
+    browse_intent = any(phrase in lower for phrase in (
+        "by client", "client names", "show clients", "list clients", "group clients",
+        "show demands", "list demands", "demands for", "requirements for", "show requirements", "list requirements",
+        "show positions", "list positions",
+    ))
+    if "client" not in lower or not browse_intent:
+        return None
+    positions = db.query(Position).order_by(Position.created_at.desc()).all()
+    if not positions:
+        return "I couldn't find any saved demands yet.", {"action": "client_groups", "clients": []}
+    demand_names = sorted({p.demand.name for p in positions if p.demand and p.demand.name}, key=len, reverse=True)
+    demand_filter = next((name for name in demand_names if name.lower() in lower), None)
+    if demand_filter:
+        positions = [p for p in positions if p.demand and p.demand.name.lower() == demand_filter.lower()]
+    client_names = sorted({(p.client_name or "").strip() for p in positions if (p.client_name or "").strip()}, key=len, reverse=True)
+    client_filter = next((name for name in client_names if name.lower() in lower), None)
+
+    def serialize(p):
+        return {"id": p.id, "display_id": p.display_id, "title": p.title, "client_name": p.client_name,
+                "demand_id": p.demand_id, "demand_name": p.demand.name if p.demand else None}
+
+    if client_filter:
+        matches = [serialize(p) for p in positions if (p.client_name or "").strip().lower() == client_filter.lower()]
+        if not matches:
+            return f"I couldn't find demands for {client_filter}" + (f" in {demand_filter}." if demand_filter else "."), {"action": "client_demands", "client_name": client_filter, "requirements": []}
+        return f"Here are the demands for {client_filter}" + (f" in {demand_filter}." if demand_filter else "."), {"action": "client_demands", "client_name": client_filter, "requirements": matches}
+
+    grouped = {}
+    for position in positions:
+        name = (position.client_name or "").strip() or "No client assigned"
+        grouped.setdefault(name, []).append(serialize(position))
+    clients = [{"name": name, "count": len(requirements), "requirements": requirements}
+               for name, requirements in sorted(grouped.items(), key=lambda item: (item[0] == "No client assigned", item[0].casefold()))]
+    scope = f" in {demand_filter}" if demand_filter else ""
+    return f"I grouped the demands by client{scope}. Select a client to see its requirements.", {"action": "client_groups", "demand_name": demand_filter, "clients": clients}
+
+
+def _demand_count_action(db: Session, message: str) -> Optional[tuple]:
+    """Answer count questions about saved demand/requirement records, optionally scoped by a name."""
+    lower = (message or "").lower()
+    asks_count = re.search(r"\b(how\s+many|number\s+of|count(?:\s+of)?)\b", lower)
+    names_records = re.search(r"\b(demands?|requirements?|job\s+descriptions?|jds?)\b", lower)
+    if not asks_count or not names_records:
+        return None
+
+    stop = {
+        "how", "many", "number", "of", "count", "the", "are", "is", "there", "in", "on", "for",
+        "present", "available", "saved", "currently", "total", "please", "can", "you", "check", "tell",
+        "me", "show", "all", "what", "within", "under", "by", "and", "or", "a", "an", "demand",
+        "demands", "requirement", "requirements", "job", "description", "descriptions", "jd", "jds",
+    }
+    terms = [term for term in re.findall(r"[a-z0-9]+", lower) if term not in stop]
+    positions = db.query(Position).order_by(Position.created_at.desc()).all()
+    matches = []
+    for position in positions:
+        indexed = " ".join((position.title or "", position.client_name or "", position.demand.name if position.demand else "", position.jd_text or "")).lower()
+        if not terms or all(term in indexed for term in terms):
+            matches.append(position)
+
+    if terms:
+        scope = " ".join(terms)
+        noun = f"matching “{scope}”"
+    else:
+        scope = None
+        noun = "in total"
+    count = len(matches)
+    if count == 0:
+        reply = f"I couldn’t find any saved demands {noun}."
+    else:
+        sample = "; ".join(f"{p.display_id or 'JD'} · {p.title}" for p in matches[:8])
+        suffix = f" Examples: {sample}." if sample else ""
+        reply = f"There {'is' if count == 1 else 'are'} {count} saved demand{'s' if count != 1 else ''} {noun}.{suffix}"
+    return reply, {"action": "demand_count", "count": count, "query": scope,
+                   "requirements": [{"id": p.id, "display_id": p.display_id, "title": p.title} for p in matches]}
+
+
+def _jd_field_report(title: str, text: str) -> dict:
+    """Extract only values stated in the JD and explicitly list fields that were not found."""
+    filters = extract_jd_filters(title or "", text or "")
+    exp = [float(value) for value in YEARS_EXP_PATTERN.findall(text or "")]
+    exp_range = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\b", text or "", re.I)
+    stated_count = re.search(r"\b(\d{1,4})\s+(?:openings?|positions?|vacanc(?:y|ies)|resources?)\b", text or "", re.I)
+    stated_client = re.search(r"\b(?:client|customer)(?:\s+name)?\s*[:\-]\s*([^\n,;]{2,100})", text or "", re.I)
+    start_date = _extract_labeled_date(text, r"start(?:ing)?\s+date|joining\s+date")
+    end_date = _extract_labeled_date(text, r"(?:tentative\s+)?end\s+date|contract\s+end|assignment\s+end")
+    stated_role = filters.get("role") if (filters.get("sources") or {}).get("role") == "jd_text" else None
+    skill_section = re.search(
+        r"(?:required\s+skills?|technical\s+skills?|skills\s*(?:and\s*qualifications)?|qualifications?|requirements?)\s*[:\-]?\s*\n(.*?)(?=\n\s*(?:[A-Z][A-Z /&-]{2,}|responsibilities|what you will|about the role)\s*[:\-]?\s*$|\Z)",
+        text or "", re.I | re.S,
+    )
+    skill_lines = []
+    if skill_section:
+        chunks = re.split(r"[,;\n•]+", skill_section.group(1))
+        for chunk in chunks:
+            cleaned = re.sub(r"^\s*[-*•\d.)]+\s*", "", chunk).strip(" \t,;•.")
+            if cleaned and len(cleaned) <= 70 and len(skill_lines) < 12:
+                skill_lines.append(cleaned)
+    fields = {
+        "Job title": stated_role,
+        "Client": stated_client.group(1).strip() if stated_client else None,
+        "Location": filters.get("location"),
+        "Experience": (f"{float(exp_range.group(1)):g}-{float(exp_range.group(2)):g} years" if exp_range else f"{max(exp):g}+ years" if exp else None),
+        "Maximum experience": float(exp_range.group(2)) if exp_range else None,
+        "Work mode": filters.get("work_mode"),
+        "Number of positions": int(stated_count.group(1)) if stated_count else None,
+        "Skills / qualifications": ", ".join(skill_lines) if skill_lines else None,
+        "Start date": start_date,
+        "End date": end_date,
+    }
+    present = [{"name": name, "value": str(value)} for name, value in fields.items() if value not in (None, "")]
+    missing = [name for name, value in fields.items() if value in (None, "")]
+    values = {
+        "role": stated_role,
+        "title": stated_role,
+        "client_name": fields["Client"],
+        "location": fields["Location"],
+        "locations": [part.strip() for part in re.split(r"[,;|]", fields["Location"] or "") if part.strip()],
+        "experience_years": float(exp_range.group(1)) if exp_range else (min(exp) if exp else None),
+        "experience_max_years": float(exp_range.group(2)) if exp_range else None,
+        "position_count": fields["Number of positions"],
+        "work_mode": fields["Work mode"],
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    return {"present": present, "missing": missing, "values": values}
+
+
+def _extract_labeled_date(text: str, label_pattern: str) -> Optional[str]:
+    token = r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})"
+    match = re.search(rf"\b(?:{label_pattern})\b\s*(?:is|on|:|=|-)?\s*{token}", text or "", re.I)
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y",
+                "%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _field_request(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    return any(phrase in normalized for phrase in (
+        "what fields", "which fields", "fields present", "fields missing", "missing fields", "not stated fields",
+        "what is in the jd", "what's in the jd", "what does the jd", "check the jd fields", "jd field report",
+    ))
+
+
+def _field_report_for_request(db: Session, conversation: Conversation, request: AssistantMessageRequest) -> Optional[tuple]:
+    """Resolve a JD field question to an explicit position, latest upload, or sole saved JD."""
+    display_id = _JD_ID.search(request.message or "")
+    position = db.query(Position).filter(Position.id == request.position_id).first() if request.position_id else None
+    if not position and display_id:
+        position = db.query(Position).filter(Position.display_id.ilike(display_id.group(0))).first()
+    if not position:
+        terms = {term.lower() for term in re.findall(r"[a-z0-9]{3,}", request.message or "")}
+        stop = {"what", "which", "fields", "field", "missing", "present", "found", "stated", "extracted", "does", "this", "that", "the", "are", "for", "jd", "job", "description", "demand"}
+        specific = terms - stop
+        if specific:
+            candidates = db.query(Position).order_by(Position.created_at.desc()).all()
+            ranked = sorted(candidates, key=lambda p: sum(term in (p.title or "").lower() for term in specific), reverse=True)
+            if ranked and sum(term in (ranked[0].title or "").lower() for term in specific) > 0:
+                position = ranked[0]
+    if position:
+        report = _jd_field_report(position.title, position.jd_text or "")
+        # Recruiter-entered values are useful saved fields even when the JD body omits them.
+        explicit = {
+            "Job title": position.role,
+            "Client": position.client_name,
+            "Location": position.location,
+            "Experience": (f"{position.experience_years:g}+ years" if position.experience_years is not None else None),
+            "Number of positions": position.no_of_positions,
+        }
+        _merge_report_values(report, explicit)
+        ref = {"id": position.id, "display_id": position.display_id, "title": position.title}
+    else:
+        raw_upload = next((m.message_data for m in reversed(conversation.messages)
+                           if m.role == "assistant" and (m.message_data or {}).get("action") == "confirm_jd"), None)
+        if raw_upload:
+            draft = raw_upload.get("draft") or {}
+            report = raw_upload.get("field_report") or _jd_field_report(draft.get("title", ""), draft.get("jd_text", ""))
+            ref = {"title": draft.get("title"), "filename": draft.get("original_filename")}
+        else:
+            positions = db.query(Position).order_by(Position.created_at.desc()).limit(2).all()
+            if len(positions) != 1:
+                if positions:
+                    choices = _position_choices(db)
+                    return "Which requirement should I inspect? Choose one by its ID:", {"action": "choose_position", "positions": choices}
+                return None
+            position = positions[0]
+            report = _jd_field_report(position.title, position.jd_text or "")
+            ref = {"id": position.id, "display_id": position.display_id, "title": position.title}
+    title = ref.get("display_id") or ref.get("title") or "the uploaded JD"
+    present = "; ".join(f"{item['name']}: {item['value']}" for item in report["present"]) or "No structured fields were confirmed."
+    missing = ", ".join(report["missing"]) or "None of the tracked fields."
+    reply = f"For {title}, I found: {present}. Not stated: {missing}."
+    return reply, {"action": "field_report", "position": ref, "field_report": report}
+
+
+def _merge_report_values(report: dict, values: dict) -> None:
+    by_name = {item["name"]: item for item in report["present"]}
+    for name, value in values.items():
+        if value not in (None, ""):
+            by_name[name] = {"name": name, "value": str(value)}
+    report["present"] = list(by_name.values())
+    report["missing"] = [name for name in report["missing"] if name not in by_name]
 
 
 def _json_reply(messages: List[Dict[str, str]]) -> str:
@@ -123,11 +345,23 @@ def _generic_messages(db: Session, request: AssistantMessageRequest, conversatio
         for m in conversation.messages[-8:]
         if m.role in ("user", "assistant")
     ]
-    positions = _position_choices(db)
-    context = json.dumps(positions, ensure_ascii=True)
+    positions = [{"id": p.id, "display_id": p.display_id, "title": p.title, "demand": p.demand.name if p.demand else None,
+                 "role": p.role, "location": p.location, "experience_years": p.experience_years,
+                 "experience_max_years": p.experience_max_years, "no_of_positions": p.no_of_positions,
+                 "jd_text": (p.jd_text or "")[:2000]}
+                for p in db.query(Position).order_by(Position.created_at.desc()).limit(10).all()]
+    raw_upload = next((m.message_data for m in reversed(conversation.messages)
+                          if m.role == "assistant" and (m.message_data or {}).get("action") == "confirm_jd"), None)
+    recent_upload = None
+    if raw_upload:
+        draft = raw_upload.get("draft") or {}
+        recent_upload = {"title": draft.get("title"), "filename": draft.get("original_filename"),
+                         "field_report": raw_upload.get("field_report"), "jd_text": (draft.get("jd_text") or "")[:4000]}
+    context = json.dumps({"saved_requirements": positions, "most_recent_uploaded_jd": recent_upload}, ensure_ascii=True, default=str)
     prompt = (
         "You are the TruHire recruitment assistant. Help with resumes, demand documents, candidate matching, "
-        "and email drafting. Never invent candidate facts. If the user asks to create a demand, ask for a fixed demand "
+        "and email drafting. Answer questions about uploaded or saved JDs from the supplied context. For field checks, "
+        "separate fields explicitly found from fields not stated; never present a guess as extracted. Never invent candidate facts. If the user asks to create a demand, ask for a fixed demand "
         "choice instead of creating it automatically. Keep answers concise and actionable.\n"
         f"{SCOPE_RULE}\n"
         f"Available requirements: {context}\n"
@@ -160,6 +394,16 @@ def list_conversations(db: Session = Depends(get_db), user: User = Depends(get_c
     return {"conversations": [{"id": c.id, "title": c.title, "position_id": c.position_id, "candidate_id": c.candidate_id} for c in rows]}
 
 
+@router.delete("/conversations")
+def clear_conversations(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = db.query(Conversation).filter(Conversation.user_id == user.id).all()
+    count = len(rows)
+    for conversation in rows:
+        db.delete(conversation)
+    db.commit()
+    return {"deleted": count}
+
+
 @router.get("/conversations/{conversation_id}")
 def get_conversation(conversation_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == user.id).first()
@@ -178,6 +422,10 @@ def _route_message(db: Session, request: AssistantMessageRequest) -> Optional[tu
     """Deterministic assistant actions. Returns (reply, data), or None when the message is a free-text
     question that needs the LLM."""
     lower = request.message.lower()
+
+    client_action = _client_demand_action(db, request.message)
+    if client_action:
+        return client_action
 
     if any(term in lower for term in ("show candidates", "find candidates", "candidate matches", "matching candidates", "top candidates")):
         position = _find_position(db, request.message, request.position_id)
@@ -207,11 +455,13 @@ def _route_message(db: Session, request: AssistantMessageRequest) -> Optional[tu
     ):
         title = next((line.strip() for line in request.message.splitlines() if line.strip()), "Uploaded Job Description")[:200]
         classification = classify_jd_detailed(title, request.message)
-        reply = "I read the demand document. Before I create it, choose exactly one demand category. I will not auto-assign it."
+        field_report = _jd_field_report(title, request.message)
+        reply = "I’ve read the demand. I’ll ask about any key details I couldn’t find, then you can choose where to file it."
         data = {
             "action": "confirm_jd",
-            "draft": {"title": title, "jd_text": request.message, "role": None, "location": None, "experience_years": None, "position_count": 1},
+            "draft": {**field_report["values"], "title": field_report["values"].get("title") or title, "jd_text": request.message},
             "suggested_demand": classification.category if classification.confident else None,
+            "field_report": field_report,
             "demands": [{"id": canonical_demand_id(name), "name": name} for name in DEFAULT_DEMAND_NAMES],
         }
     else:
@@ -235,7 +485,11 @@ def assistant_message(
 ):
     conversation = _conversation(db, user, request.conversation_id)
     _save_message(db, conversation, "user", request.message)
-    routed = _route_message(db, request)
+    routed = _demand_count_action(db, request.message)
+    if routed is None and _field_request(request.message):
+        routed = _field_report_for_request(db, conversation, request)
+    if routed is None:
+        routed = _route_message(db, request)
     if routed is None and _out_of_scope(request, conversation):
         routed = (REFUSAL, {"action": "reply"})
     if routed is None:
@@ -260,7 +514,11 @@ def assistant_message_stream(
     conversation = _conversation(db, user, request.conversation_id)
     conversation_id = conversation.id
     _save_message(db, conversation, "user", request.message)
-    routed = _route_message(db, request)
+    routed = _demand_count_action(db, request.message)
+    if routed is None and _field_request(request.message):
+        routed = _field_report_for_request(db, conversation, request)
+    if routed is None:
+        routed = _route_message(db, request)
     if routed is None and _out_of_scope(request, conversation):
         routed = (REFUSAL, {"action": "reply"})
     if routed is not None:
@@ -296,6 +554,9 @@ def assistant_message_stream(
 def confirm_jd(request: AssistantConfirmJDRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if request.demand_id not in {canonical_demand_id(name) for name in DEFAULT_DEMAND_NAMES}:
         raise HTTPException(422, "Choose one of: " + ", ".join(DEFAULT_DEMAND_NAMES) + ".")
+    conversation = db.query(Conversation).filter(Conversation.id == request.conversation_id, Conversation.user_id == user.id).first() if request.conversation_id else None
+    if request.conversation_id and not conversation:
+        raise HTTPException(404, "Assistant conversation not found.")
     created = create_jd(PositionCreateRequest(
         title=request.title,
         jd_text=request.jd_text,
@@ -303,11 +564,22 @@ def confirm_jd(request: AssistantConfirmJDRequest, db: Session = Depends(get_db)
         no_of_positions=request.position_count if request.position_count is not None else 1,
         role=request.role,
         location=request.location,
+        locations=request.locations or ([request.location] if request.location else None),
         experience_years=request.experience_years,
+        experience_max_years=request.experience_max_years,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        client_name=request.client_name,
         file_url=request.file_url,
         original_filename=request.original_filename,
-    ), db, user)
-    return {"action": "created", "position": {"id": created.id, "display_id": created.display_id, "title": created.title, "demand_id": created.demand_id, "no_of_positions": created.no_of_positions}, "message": f"Created {created.display_id} · {created.title} in the selected demand."}
+    ), db, user, source="assistant", work_mode=request.work_mode)
+    client_note = f" for {created.client_name}" if created.client_name else ""
+    response = {"action": "created", "position": {"id": created.id, "display_id": created.display_id, "title": created.title, "demand_id": created.demand_id, "client_name": created.client_name, "no_of_positions": created.no_of_positions}, "message": f"Created {created.display_id} · {created.title}{client_note} in the selected demand."}
+    if conversation:
+        _save_message(db, conversation, "assistant", response["message"], response)
+        conversation.updated_at = __import__("datetime").datetime.utcnow()
+        db.commit()
+    return response
 
 
 @router.post("/upload")
@@ -346,7 +618,8 @@ async def assistant_upload(
         file_url, _ = save_upload_file(filename, content, category="job_descriptions")
         title = filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()[:200] or "Uploaded Job Description"
         classification = classify_jd_detailed(title, text)
-        data = {"action": "confirm_jd", "reply": f"I received and read “{filename}”. Choose a demand category before I create it.", "draft": {"title": title, "jd_text": text, "file_url": file_url, "original_filename": filename, "position_count": 1}, "suggested_demand": classification.category if classification.confident else None, "demands": [{"id": canonical_demand_id(name), "name": name} for name in DEFAULT_DEMAND_NAMES]}
+        report = _jd_field_report(title, text)
+        data = {"action": "confirm_jd", "reply": f"I’ve read {filename}. I’ll check the details I found with you, then ask about anything important that’s missing.", "draft": {**report["values"], "title": report["values"].get("title") or title, "jd_text": text, "file_url": file_url, "original_filename": filename}, "suggested_demand": classification.category if classification.confident else None, "field_report": report, "demands": [{"id": canonical_demand_id(name), "name": name} for name in DEFAULT_DEMAND_NAMES]}
         _save_message(db, conversation, "assistant", data["reply"], data)
         conversation.updated_at = __import__("datetime").datetime.utcnow()
         db.commit()

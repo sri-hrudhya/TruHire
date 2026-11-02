@@ -4,6 +4,7 @@ import useRequirements from '../hooks/useRequirements';
 import Notice from '../components/ui/Notice';
 import ResumePreviewModal from '../components/ResumePreviewModal';
 import DemandCards from '../components/requirements/DemandCards';
+import ClientCards from '../components/requirements/ClientCards';
 import JdCards from '../components/requirements/JdCards';
 import JdDetails from '../components/requirements/JdDetails';
 import JdStatusBadge from '../components/requirements/JdStatusBadge';
@@ -29,6 +30,9 @@ export default function JobDescriptionsPage() {
 
   const jd = r.selectedJd;
   const demand = r.demands.find((d) => d.id === r.demandId);
+  const clientJds = r.visibleJds.filter((item) => r.clientName === '__unassigned__'
+    ? !item.client_name?.trim()
+    : item.client_name?.trim().toLocaleLowerCase() === r.clientName.toLocaleLowerCase());
   const forEmail = r.matches.map((m) => ({
     ...m.candidate, match_score: m.match_score, requirement_status: m.requirement_status, last_email: m.last_email,
   }));
@@ -49,7 +53,8 @@ export default function JobDescriptionsPage() {
   const crumbs = [{ label: 'Requirements', onClick: () => r.setDemand(null) }];
   if (r.historyOpen) crumbs.push({ label: 'Requirement History' });
   else {
-    if (demand) crumbs.push({ label: demand.name, onClick: jd || r.creating ? () => r.setDemand(demand.id) : undefined });
+    if (demand) crumbs.push({ label: demand.name, onClick: r.clientName || jd || r.creating ? () => r.setDemand(demand.id) : undefined });
+    if (r.clientName) crumbs.push({ label: r.clientName === '__unassigned__' ? 'No client assigned' : r.clientName, onClick: jd || r.creating ? () => r.setClient(r.clientName) : undefined });
     if (r.creating) crumbs.push({ label: 'New demand' });
     else if (jd) crumbs.push({ label: jd.title });
   }
@@ -138,12 +143,12 @@ export default function JobDescriptionsPage() {
               />
             )}
           </>
-        ) : view === 'list' ? (
+        ) : view === 'list' && (!demand || r.clientName) ? (
           <>
             {demand && <div className="section-head"><h2>{demand.name}</h2></div>}
             <JdTable
               key={demand?.id || 'all'}
-              jds={demand ? r.visibleJds : sortByStatus(r.jds)}
+              jds={demand ? clientJds : sortByStatus(r.jds)}
               loading={r.loading}
               practiceName={practiceName}
               onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
@@ -152,12 +157,17 @@ export default function JobDescriptionsPage() {
               onCreate={create}
             />
           </>
+        ) : demand && !r.clientName && r.visibleJds.length > 0 ? (
+          <>
+            <div className="section-head"><h2>{demand.name} <span className="slug">Clients · {r.visibleJds.length} {r.visibleJds.length === 1 ? 'demand' : 'demands'}</span></h2><button type="button" className="btn btn-primary" onClick={create}>New demand</button></div>
+            <ClientCards jds={r.visibleJds} loading={r.loading} onOpen={(name) => r.setClient(name || '__unassigned__')} />
+          </>
         ) : demand ? (
           <>
-            <div className="section-head"><h2>{demand.name} <span className="slug">{demand.jd_count} {demand.jd_count === 1 ? 'demand' : 'demands'}{r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}</span></h2></div>
+            <div className="section-head"><h2>{r.clientName ? (r.clientName === '__unassigned__' ? 'No client assigned' : r.clientName) : demand.name}<span className="slug">{r.clientName ? ` · ${clientJds.length} ${clientJds.length === 1 ? 'demand' : 'demands'}` : ` · ${demand.jd_count} ${demand.jd_count === 1 ? 'demand' : 'demands'}${r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}`}</span></h2></div>
             <JdCards
-              key={demand.id}
-              jds={r.visibleJds}
+              key={`${demand.id}-${r.clientName}`}
+              jds={r.clientName ? clientJds : r.visibleJds}
               loading={r.loading}
               onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
               onDelete={setDeleting}

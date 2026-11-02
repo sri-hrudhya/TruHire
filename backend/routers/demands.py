@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import get_db
-from backend.models import INACTIVE_JD_STATUSES, DEFAULT_DEMAND_NAMES, canonical_demand_id, demand_display_id, Demand, Position, User
+from backend.models import INACTIVE_JD_STATUSES, DEFAULT_DEMAND_NAMES, canonical_demand_id, Demand, Position, User
 
 router = APIRouter(prefix="/api/demands", tags=["demands"])
 
@@ -35,7 +35,6 @@ class DemandResponse(BaseModel):
     clients: List[str] = []  # distinct client names of the counted demands, alphabetical
     unassigned_client_count: int = 0  # counted demands with no client name
     is_default: bool = False
-    display_id: Optional[str] = None
     created_by_name: Optional[str] = None
 
 
@@ -88,7 +87,7 @@ def _client_summary(positions) -> dict:
 
 
 def _serialize(demand: Demand, jd_count: int, creator_name: Optional[str] = None, clients: Optional[dict] = None) -> dict:
-    return {**(clients or {}), "display_id": demand_display_id(demand.id), "created_by_name": creator_name,  # None for system-seeded demands
+    return {**(clients or {}), "created_by_name": creator_name,  # None for system-seeded demands
             "is_default": _is_default(demand), "id": demand.id, "name": demand.name, "description": demand.description, "created_by": demand.created_by,
             "created_at": demand.created_at, "updated_at": demand.updated_at, "jd_count": jd_count}
 

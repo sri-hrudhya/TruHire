@@ -142,6 +142,7 @@ export const searchApi = {
 export const assistantApi = {
   listConversations: () => api.get('/assistant/conversations'),
   getConversation: (id) => api.get(`/assistant/conversations/${id}`),
+  clearConversations: () => api.delete('/assistant/conversations'),
   send: (data) => api.post('/assistant/message', data, { timeout: TIMEOUTS_MS.search }),
   confirmJd: (data) => api.post('/assistant/confirm-jd', data, { timeout: TIMEOUTS_MS.jdFilters }),
   upload: (formData) => api.post('/assistant/upload', formData, {

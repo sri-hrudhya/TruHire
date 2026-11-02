@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.services.common.payloads import candidate_payload
 from backend.models import (
-    Position, User, DEFAULT_DEMAND_NAMES, canonical_demand_id, demand_display_id, Candidate, CandidateMatch, SearchState, Conversation, EmailRecord,
+    Position, User, DEFAULT_DEMAND_NAMES, canonical_demand_id, Candidate, CandidateMatch, SearchState, Conversation, ConversationMessage, EmailRecord,
     CandidateAssignment, CandidateComment, RequirementCandidateStatus, REQUIREMENT_STATUSES, DEFAULT_REQUIREMENT_STATUS, get_next_position_display_id,
     JD_STATUSES, LEGACY_JD_STATUS_ALIASES, DEFAULT_JD_STATUS, CLIENT_NAMES, RESUME_LINKED_JD_STATUSES, MAX_CANCELLATION_REASON_CHARS, HISTORY_ACTIONS, HISTORY_CREATED, HISTORY_UPDATED, HISTORY_DELETED, HISTORY_STATUS_CHANGED, RequirementHistory,
 )
@@ -255,22 +255,21 @@ def invalidate_requirements_cache(jd_id: Optional[str] = None):
         clear_cache(f"requirements:matches:{jd_id}")
 
 
-TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "no_of_positions", "start_date", "end_date", "location", "client_name", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
+TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "no_of_positions", "start_date", "end_date", "location", "client_name", "work_mode", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
 _TEXT_PREVIEW_CHARS = 300
 
 
 def _demand_name(demand_id: Optional[str]) -> Optional[str]:
-    """'TRU-DM-01 · Java' for the history log; None stays None."""
-    name = next((n for n in DEFAULT_DEMAND_NAMES if canonical_demand_id(n) == demand_id), None)
-    return f"{demand_display_id(demand_id)} · {name}" if name else demand_id
-
+    """Return the practice name for history; requirement IDs are shown separately."""
+    return next((n for n in DEFAULT_DEMAND_NAMES if canonical_demand_id(n) == demand_id), None) or demand_id
 
 def _clip(text: Optional[str]) -> Optional[str]:
     return text if not text or len(text) <= _TEXT_PREVIEW_CHARS else text[:_TEXT_PREVIEW_CHARS] + "…"
 
 
 def _snapshot(pos: Position) -> dict:
-    snap = history.snapshot(pos, TRACKED_FIELDS)
+    snap = history.snapshot(pos, tuple(field for field in TRACKED_FIELDS if field != "work_mode"))
+    snap["work_mode"] = (pos.search_filters or {}).get("work_mode")
     snap["status"] = LEGACY_JD_STATUS_ALIASES.get(snap["status"], snap["status"]) or DEFAULT_JD_STATUS
     snap["mapped_candidate_ids"] = ",".join(sorted(pos.mapped_candidate_ids or [])) or None
     return snap
@@ -405,7 +404,7 @@ def _checked_jd_file_url(file_url: Optional[str]) -> Optional[str]:
     return file_url
 
 
-def create_jd(req: PositionCreateRequest, db: Session, user: User) -> Position:
+def create_jd(req: PositionCreateRequest, db: Session, user: User, source: str = "requirements", work_mode: Optional[str] = None) -> Position:
     if not req.title.strip() or not req.jd_text.strip():
         raise HTTPException(400, "Title and requirement text cannot be blank.")
     display_id = get_next_position_display_id(db)
@@ -428,12 +427,23 @@ def create_jd(req: PositionCreateRequest, db: Session, user: User) -> Position:
         pos.demand_id = _checked_demand_id(req.demand_id)
     else:
         _classify_position(pos)
+    if source == "assistant" and (work_mode or req.location or req.role):
+        existing = extract_jd_filters(pos.title, pos.jd_text)
+        sources = dict(existing.get("sources") or {})
+        if req.location:
+            sources["location"] = "recruiter"
+        if req.role:
+            sources["role"] = "recruiter"
+        pos.search_filters = {**existing, "location": req.location or existing.get("location"),
+                              "role": req.role or existing.get("role"), "work_mode": work_mode or existing.get("work_mode"),
+                              "sources": sources, "jd_version": pos.jd_version, "title": pos.title,
+                              "extractor": JD_FILTER_EXTRACTOR_VERSION}
     db.add(pos)
     db.flush()
     if req.status and req.status != DEFAULT_JD_STATUS:
         _apply_status(db, pos, req.status, req.cancellation_reason, req.candidate_ids)
     stated = {k: v for k, v in _snapshot(pos).items() if v is not None}
-    history.record(db, HISTORY_CREATED, pos, user, _readable(history.diff({}, stated)))
+    history.record(db, HISTORY_CREATED, pos, user, _readable(history.diff({}, stated)), source=source)
     db.commit()
     db.refresh(pos)
     invalidate_requirements_cache()
@@ -920,7 +930,38 @@ def get_requirement_history(action: Optional[str] = None, date_from: Optional[da
         q = q.filter(RequirementHistory.created_at <= _naive_utc(date_to))
     total = q.count()
     rows = q.order_by(RequirementHistory.created_at.desc(), RequirementHistory.id.desc()).offset(max(0, offset)).limit(limit).all()
-    return {"total": total, "limit": limit, "offset": max(0, offset), "items": [history.serialize(r) for r in rows]}
+    serialized = [history.serialize(row) for row in rows]
+
+    # Older history entries predate source tracking. Recover assistant-created IDs
+    # from the assistant's persisted completion messages; unmatched legacy entries
+    # were created through the Requirements form.
+    missing_created_ids = {
+        item["item_id"] for item in serialized
+        if item["action"] == HISTORY_CREATED and not item["source"] and item["item_id"]
+    }
+    if missing_created_ids:
+        assistant_created_ids = set()
+        messages = db.query(ConversationMessage.message_data).join(
+            Conversation, Conversation.id == ConversationMessage.conversation_id
+        ).filter(
+            Conversation.user_id == user.id,
+            ConversationMessage.role == "assistant",
+        ).all()
+        for (data,) in messages:
+            if (data or {}).get("action") == "created":
+                position_id = ((data or {}).get("position") or {}).get("id")
+                if position_id in missing_created_ids:
+                    assistant_created_ids.add(position_id)
+        for item in serialized:
+            if item["item_id"] in missing_created_ids:
+                item["source"] = "assistant" if item["item_id"] in assistant_created_ids else "requirements"
+            elif not item["source"]:
+                item["source"] = "requirements"
+    else:
+        for item in serialized:
+            if not item["source"]:
+                item["source"] = "requirements"
+    return {"total": total, "limit": limit, "offset": max(0, offset), "items": serialized}
 
 
 @router.post("/api/job-descriptions/{id}/summarize")

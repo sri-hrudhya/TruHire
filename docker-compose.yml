@@ -95,7 +95,7 @@ services:
       OPENSEARCH_URL: http://opensearch:9200
       OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-truhire-candidates-v2}
       SECRET_KEY: ${SECRET_KEY:-truhire_container_jwt_secret_key_change_me_outside_dev}
-      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:65432/v1}
       VLLM_MODEL: ${VLLM_MODEL:-}
       VLLM_API_KEY: ${VLLM_API_KEY:-}
       SEARCH_LLM_RERANK_ENABLED: ${SEARCH_LLM_RERANK_ENABLED:-false}

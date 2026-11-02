@@ -63,6 +63,9 @@ export default function RequirementHistory() {
       <ol className="history-list">
         {items.map((entry) => {
           const changes = historyChanges(entry);
+          const sourceLabel = entry.source === 'assistant' ? 'Chat Assistant'
+            : entry.source === 'system' ? 'System'
+              : 'Manual';
           return (
             <li key={entry.id} className="card history-item">
               <div className="cluster cluster-between">
@@ -73,9 +76,10 @@ export default function RequirementHistory() {
                 <span className="slug">{formatDateTime(entry.created_at)}</span>
               </div>
               <p className="slug history-meta">
-                {entry.demand_display_id && <span>Demand ID: <strong>{entry.demand_display_id}</strong>{entry.demand_name ? ` · ${entry.demand_name}` : ''}</span>}
+                {entry.demand_name && <span>Practice: <strong>{entry.demand_name}</strong></span>}
                 {entry.item_display_id && <span>Demand ID: <strong>{entry.item_display_id}</strong></span>}
                 <span>By {entry.user_name || 'System'}</span>
+                <span>{entry.action === 'created' ? 'Created via' : 'Via'} {sourceLabel}</span>
               </p>
               {changes.length > 0 && (
                 <ul className="history-changes">

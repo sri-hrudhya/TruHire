@@ -32,6 +32,7 @@ export default function useRequirements() {
   const [retention, setRetention] = useState(null);
 
   const demandId = resolveActiveCategory(demands, searchParams.get('demand'));
+  const clientName = searchParams.get('client') || '';
 
   const loadDemands = useCallback(async () => {
     try { setDemands((await demandApi.list()).data); } catch (err) { console.error('Failed to load categories:', err); }
@@ -106,6 +107,18 @@ export default function useRequirements() {
   const setDemand = (id) => {
     const next = new URLSearchParams(searchParams);
     if (id) next.set('demand', id); else next.delete('demand');
+    next.delete('client');
+    next.delete('id');
+    next.delete('view');
+    setSelectedJd(null);
+    setCreating(false);
+    setMatches([]);
+    setSearchParams(next, { replace: true });
+  };
+
+  const setClient = (name) => {
+    const next = new URLSearchParams(searchParams);
+    if (name) next.set('client', name); else next.delete('client');
     next.delete('id');
     next.delete('view');
     setSelectedJd(null);
@@ -296,7 +309,7 @@ export default function useRequirements() {
   };
 
   return {
-    user, jds, visibleJds, demands, demandId, setDemand, selectedJd, creating, template, loading, notice, setNotice,
+    user, jds, visibleJds, demands, demandId, setDemand, clientName, setClient, selectedJd, creating, template, loading, notice, setNotice,
     matches, loadingMatches, minMatchScore, coverage, statusError, assignments, users, retention,
     historyOpen, showHistory, closeJd, changeJdStatus, changeEndDate,
     selectJd, startCreate, loadMatches, changeStatus, assign, saveJd, summarize, removeJd, runRetentionCleanup, openJdFile,

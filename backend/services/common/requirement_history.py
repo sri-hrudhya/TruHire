@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
-from backend.models import DEFAULT_DEMAND_NAMES, Position, RequirementHistory, User, canonical_demand_id, demand_display_id
+from backend.models import DEFAULT_DEMAND_NAMES, Position, RequirementHistory, User, canonical_demand_id
 
 
 def _plain(value: Any) -> Any:
@@ -26,11 +26,11 @@ def diff(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Dict[str, A
 
 
 def record(db: Session, action: str, pos: Position, user: Optional[User], changes: Optional[Dict[str, Any]] = None,
-           user_name: Optional[str] = None) -> None:
+           user_name: Optional[str] = None, source: str = "requirements") -> None:
     demand_name = next((n for n in DEFAULT_DEMAND_NAMES if canonical_demand_id(n) == pos.demand_id), None)
     db.add(RequirementHistory(
-        action=action, item_type="jd", item_id=pos.id, item_display_id=pos.display_id, item_title=pos.title,
-        demand_id=pos.demand_id, demand_display_id=demand_display_id(pos.demand_id), demand_name=demand_name,
+        action=action, item_type="jd", source=source, item_id=pos.id, item_display_id=pos.display_id, item_title=pos.title,
+        demand_id=pos.demand_id, demand_name=demand_name,
         user_id=user.id if user else None, user_name=(user.name if user else user_name) or "System", changes=changes or None,
     ))
 
@@ -38,8 +38,8 @@ def record(db: Session, action: str, pos: Position, user: Optional[User], change
 def serialize(row: RequirementHistory) -> Dict[str, Any]:
     return {
         "id": row.id, "created_at": row.created_at.isoformat() + "Z" if row.created_at else None,  # stored naive-UTC
-        "action": row.action, "item_type": row.item_type, "item_id": row.item_id,
+        "action": row.action, "item_type": row.item_type, "source": row.source, "item_id": row.item_id,
         "item_display_id": row.item_display_id, "item_title": row.item_title,
-        "demand_id": row.demand_id, "demand_display_id": row.demand_display_id, "demand_name": row.demand_name,
+        "demand_id": row.demand_id, "demand_name": row.demand_name,
         "user_id": row.user_id, "user_name": row.user_name, "changes": row.changes or {},
     }

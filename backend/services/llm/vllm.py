@@ -3,7 +3,7 @@ TruHire vLLM client.
 
 Chat:
     DGX vLLM OpenAI-compatible API
-    http://localhost:8000/v1
+    http://localhost:65432/v1
 
 Embeddings:
     Requires a REAL embedding model exposed through an OpenAI-compatible
@@ -15,7 +15,7 @@ a separate embedding server/model.
 
 Environment variables:
 
-    VLLM_BASE_URL=http://localhost:8000/v1
+    VLLM_BASE_URL=http://localhost:65432/v1
     VLLM_MODEL=nvidia/Qwen3.6-35B-A3B-NVFP4
     VLLM_API_KEY=EMPTY
     VLLM_TIMEOUT=120
@@ -57,11 +57,11 @@ def _normalise_base_url(url: str) -> str:
 
     Examples:
 
-        http://localhost:8000/v1/
-        -> http://localhost:8000/v1
+        http://localhost:65432/v1/
+        -> http://localhost:65432/v1
 
-        http://localhost:8000
-        -> http://localhost:8000/v1
+        http://localhost:65432
+        -> http://localhost:65432/v1
     """
     url = (url or "").strip().rstrip("/")
 
@@ -381,7 +381,7 @@ def generate_embedding(text: str) -> List[float]:
             "Do not set VLLM_EMBEDDING_MODEL to the Qwen generation model "
             "unless the server is started with an actual embedding model.\n\n"
             "Recommended architecture:\n"
-            "  DGX :8000 -> Qwen generation\n"
+            "  DGX :65432 -> Qwen generation\n"
             "  DGX :8001 -> embedding model\n"
             "  DGX :6333 -> Qdrant\n"
         )
