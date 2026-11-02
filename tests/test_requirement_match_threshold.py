@@ -15,6 +15,7 @@ import backend.services.retrieval.search as search_module
 from backend.auth import create_access_token, get_password_hash
 from backend.config import settings
 from backend.database import SessionLocal
+from backend.services.common.payloads import candidate_payload
 from backend.main import app
 from backend.models import Candidate, CandidateMatch, IngestionBatch, RequirementCandidateStatus, User
 from backend.routers.job_descriptions import meets_match_threshold
@@ -80,7 +81,7 @@ def env():
 
     def make_cands(n, indexed=True, skills=None):
         out = []
-        for i in range(n):
+        for _ in range(n):
             c = Candidate(
                 display_id=f"THR-{tag}-{len(created_cands)}", candidate_name=f"Thr{len(created_cands)} {tag}",
                 email=f"thr{len(created_cands)}.{tag}@example.com", extracted_skills=skills or ["Python"],
@@ -124,7 +125,7 @@ def _fake_search(scores_by_position):
         rows = scores_by_position[position_id]
         cands = {c.id: c for c in db_.query(Candidate).filter(Candidate.id.in_([cid for cid, _ in rows])).all()}
         return {"total_matches": len(rows), "retrieval": {"vector": True, "lexical": True, "hybrid": True}, "results": [
-            {"candidate": search_module._candidate_payload(cands[cid]), "match_score": s, "score_breakdown": {},
+            {"candidate": candidate_payload(cands[cid]), "match_score": s, "score_breakdown": {},
              "llm_summary": "", "cited_quote": "", "cited_section": ""}
             for cid, s in rows
         ]}
@@ -156,7 +157,8 @@ def test_threshold_is_applied_per_requirement(env, monkeypatch):
         jd1: [(a, 80.0), (b, 30.0)],
         jd2: [(b, 65.0), (a, 45.0)],
     }))
-    get = lambda jd: [m["candidate"]["id"] for m in env["client"].get(f"/api/job-descriptions/{jd}/matches", headers=env["headers"]).json()["matches"]]
+    def get(jd):
+        return [m["candidate"]["id"] for m in env["client"].get(f"/api/job-descriptions/{jd}/matches", headers=env["headers"]).json()["matches"]]
     assert get(jd1) == [a]
     assert get(jd2) == [b]
 

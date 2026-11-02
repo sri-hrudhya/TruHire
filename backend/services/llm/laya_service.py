@@ -181,42 +181,6 @@ def ask_batch(state: str, questions: List[Dict[str, Any]]) -> List[LayaDecision]
     return decisions
 
 
-def ask_choice(state: str, question: str, options: List[str], criteria: str = "") -> LayaDecision:
-    q = {"id": "q", "type": "choice", "question": question, "options": options, "criteria": criteria}
-    return ask_batch(state, [q])[0]
-
-
 def ask_yesno(state: str, question: str, criteria: str = "") -> LayaDecision:
     q = {"id": "q", "type": "noul", "question": question, "criteria": criteria}
     return ask_batch(state, [q])[0]
-
-
-def ask_score_batch(states: List[str], question: str, scale: str = "1-5") -> List[LayaDecision]:
-    """
-    Like ask_score, but for many states against the SAME question in one shared
-    forward pass via Router.predict_batch - critical for latency: a plain Python loop
-    calling ask_score once per candidate measured ~0.4s/call on CPU, which is ~40s for
-    a single 100-candidate JD search. Batching amortizes the fixed per-call overhead
-    across the whole pool in one shot.
-    """
-    if not states:
-        return []
-    started = time.perf_counter()
-    try:
-        router = _get_router()
-        laya_question = _to_laya_question({"id": "q", "type": "score", "question": question, "scale": scale})
-        results = router.predict_batch([{"state": state, "questions": {"q": laya_question}} for state in states])
-    except Exception as exc:
-        ai_audit.record(provider="laya", status="error", prompt=question,
-                        latency_ms=(time.perf_counter() - started) * 1000, error=str(exc), details={"batch_size": len(states)})
-        if isinstance(exc, LayaUnavailable):
-            raise
-        raise LayaUnavailable(f"Laya batch inference failed: {exc}") from exc
-    decisions = [_to_decision((result.get("answers") or {}).get("q", {})) for result in results]
-    # One event per batch: per-candidate state would duplicate resume content into the trail.
-    ai_audit.record(
-        provider="laya", prompt=question,
-        output=", ".join(f"{d.answer:.2f}" if isinstance(d.answer, float) else str(d.answer) for d in decisions),
-        latency_ms=(time.perf_counter() - started) * 1000, details={"batch_size": len(states)},
-    )
-    return decisions

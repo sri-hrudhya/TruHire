@@ -49,7 +49,6 @@ desktop.ini
 .agents/
 .gemini/
 .gsd/
-adapters/
 scripts/
 PROJECT_RULES.md
 model_capabilities.yaml

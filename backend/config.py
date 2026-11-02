@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -213,7 +213,6 @@ class Settings(BaseSettings):
     # Scored requirement->candidate matches are expensive (embedding + retrieval + rerankers). They are keyed by
     # JD version and index epoch, so they self-invalidate on any change and can safely live long.
     CACHE_TTL_MATCHES: int = 86400
-    CACHE_TTL_SESSION: int = 86400  # 24 hours for user authentication sessions
 
     # Redis connection settings
     REDIS_URL: Optional[str] = None
@@ -254,7 +253,8 @@ class Settings(BaseSettings):
     # Rate limiting (slowapi/limits syntax: "<count>/<second|minute|hour|day>").
     RATE_LIMIT_AUTH: str = "5/minute"
     RATE_LIMIT_UPLOAD: str = "10/minute"
-    RATE_LIMIT_DEFAULT: str = "60/minute"
+    RATE_LIMIT_DEFAULT: str = "300/minute"  # per signed-in user (per IP when signed out); one search page makes several calls
+    RATE_LIMIT_USE_REDIS: bool = True  # share counts between API workers; falls back to per-process if Redis is down
 
     # In development any localhost/127.0.0.1 port is allowed (frontend can run on any port).
     # In production set CORS_ORIGINS to the exact frontend origin(s) and leave this empty.

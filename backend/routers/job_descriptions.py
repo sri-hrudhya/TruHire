@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
+from backend.services.common.payloads import candidate_payload
 from backend.models import (
     Position, User, DEFAULT_DEMAND_NAMES, canonical_demand_id, demand_display_id, Candidate, CandidateMatch, SearchState, Conversation, EmailRecord,
     CandidateAssignment, CandidateComment, RequirementCandidateStatus, REQUIREMENT_STATUSES, DEFAULT_REQUIREMENT_STATUS, get_next_position_display_id,
@@ -718,20 +719,7 @@ def get_jd_matches(id: str, top_n: int, db: Session) -> dict:
         )
         matches_data = [
             {
-                "candidate": {
-                    "id": c.id,
-                    "display_id": c.display_id,
-                    "candidate_name": c.candidate_name,
-                    "email": c.email,
-                    "phone": c.phone,
-                    "extracted_skills": c.extracted_skills or [],
-                    "years_experience": c.years_experience,
-                    "education": c.education,
-                    "status": c.status,
-                    "original_filename": c.original_filename,
-                    "uploaded_at": c.uploaded_at.isoformat() if c.uploaded_at else None,
-                    "resume_file_url": c.resume_file_url,
-                },
+                "candidate": candidate_payload(c),
                 "match_score": m.match_score,
                 "score_breakdown": m.score_breakdown or {},
                 "llm_summary": m.llm_summary or "",
@@ -815,7 +803,7 @@ async def _handle_jd_file_upload(file: UploadFile):
     try:
         extracted_text = extract_text_from_file(filename, data)
     except Exception as exc:
-        raise HTTPException(500, f"Error processing file for text extraction: {exc}")
+        raise HTTPException(500, f"Error processing file for text extraction: {exc}") from exc
 
     if not extracted_text or not extracted_text.strip():
         raise HTTPException(400, "No readable text found in the uploaded JD file.")

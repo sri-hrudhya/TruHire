@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import json
 import re
@@ -114,10 +115,8 @@ def _json_from_response(text: str) -> Optional[dict]:
     except Exception:
         match = re.search(r"\{.*\}", clean, re.DOTALL)
         if match:
-            try:
+            with contextlib.suppress(ValueError):
                 return json.loads(match.group(0))
-            except Exception:
-                pass
     return _repair_truncated_json(clean)
 
 

@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import logging
 import threading
 from pathlib import Path
 from fastapi import FastAPI

@@ -17,9 +17,9 @@ from backend.services.ingestion.parsing import extract_text_from_file, parse_res
 from backend.services.ingestion.injection_screen import screen_resume
 from backend.services.ingestion.pii import detect_pii, redact_pii
 from backend.services.ingestion.chunking import profile_chunks, candidate_header
-from backend.services.llm.ai_service import generate_embedding, generate_embeddings_batch
+from backend.services.llm.ai_service import generate_embeddings_batch
 from backend.services.retrieval.filters import index_payload_fields, set_candidate_filter_metadata
-from backend.services.retrieval.opensearch import index_candidate, index_candidates_batch
+from backend.services.retrieval.opensearch import index_candidates_batch
 from backend.services.retrieval.qdrant import upsert_candidates_batch, recreate_collection, collection_layout
 
 logger = logging.getLogger(__name__)

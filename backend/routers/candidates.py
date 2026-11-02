@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import CANDIDATE_STATUSES, NOTICE_PERIOD_UNITS, Candidate, CandidateAssignment, CandidateComment, CandidateMatch, Position, RequirementCandidateStatus, User
 from backend.auth import get_current_user
+from backend.services.common.payloads import candidate_payload
 from backend.services.retrieval.opensearch import delete_candidate as delete_lexical
 from backend.services.retrieval.qdrant import delete_candidate as delete_vector
 from backend.services.common.cache import get_cache, set_cache, delete_cache, clear_cache
@@ -52,26 +53,13 @@ def invalidate_candidate_cache(candidate_id: Optional[str] = None):
 
 def _serialize_candidate(c: Candidate) -> Dict[str, Any]:
     return {
-        "id": c.id,
-        "display_id": c.display_id,
+        **candidate_payload(c),
         "position_id": c.position_id,
-        "candidate_name": c.candidate_name,
-        "email": c.email,
-        "phone": c.phone,
-        "extracted_skills": c.extracted_skills or [],
-        "years_experience": c.years_experience,
-        "education": c.education,
-        "location": c.location,
-        "job_titles": c.job_titles or [],
         "resume_text": c.resume_text,
         "notice_period_value": c.notice_period_value,
         "notice_period_unit": c.notice_period_unit,
-        "status": c.status,
         "status_updated_by": c.status_updated_by,
         "status_updated_at": c.status_updated_at.isoformat() if c.status_updated_at else None,
-        "uploaded_at": c.uploaded_at.isoformat() if c.uploaded_at else None,
-        "original_filename": c.original_filename,
-        "resume_file_url": c.resume_file_url,
     }
 
 

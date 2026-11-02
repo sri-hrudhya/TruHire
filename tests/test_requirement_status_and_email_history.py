@@ -18,6 +18,7 @@ import backend.services.retrieval.search as search_module
 from backend.auth import create_access_token, get_password_hash
 from backend.config import settings
 from backend.database import SessionLocal
+from backend.services.common.payloads import candidate_payload
 from backend.main import app
 from backend.models import Candidate, EmailRecord, RequirementCandidateStatus, SearchState, User
 
@@ -38,7 +39,7 @@ def ctx(monkeypatch):
     tag = uuid.uuid4().hex[:6]
     skills = [["Kubernetes", "Terraform"], ["Python", "FastAPI"], ["Go"], ["Excel"]]
     cands = []
-    for i, score in enumerate(SCORES):
+    for i, _ in enumerate(SCORES):
         c = Candidate(
             display_id=f"TST-{tag}-{i}", candidate_name=f"Probe{i} {tag}", email=f"probe{i}.{tag}@example.com",
             extracted_skills=skills[i], years_experience=3 + i, education="BSc Computer Science",
@@ -55,7 +56,7 @@ def ctx(monkeypatch):
         rows = db_.query(Candidate).filter(Candidate.id.in_(cand_ids)).all()
         by_id = {c.id: c for c in rows}
         return {"total_matches": len(SCORES), "results": [
-            {"candidate": search_module._candidate_payload(by_id[cid]), "match_score": s,
+            {"candidate": candidate_payload(by_id[cid]), "match_score": s,
              "score_breakdown": {"matched_skills": by_id[cid].extracted_skills}, "llm_summary": "", "cited_quote": "", "cited_section": ""}
             for cid, s in zip(cand_ids, SCORES)
         ]}

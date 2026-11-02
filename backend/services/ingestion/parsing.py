@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import io
 import re
@@ -214,7 +215,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
                         if ocr_t:
                             ocr_text_parts.append(ocr_t)
                 except Exception:
-                    pass
+                    logger.debug("OCR of an embedded PDF image failed; skipping it.", exc_info=True)
             if ocr_text_parts:
                 text = "\n\n".join(ocr_text_parts)
     except Exception as e:
@@ -311,13 +312,11 @@ def heuristic_parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
             current_year = 2026
             total_duration = 0.0
             for start, end in year_matches:
-                try:
+                with contextlib.suppress(ValueError, TypeError):  # a malformed year range is simply not counted
                     s_yr = int(start)
                     e_yr = current_year if end.lower() in ['present', 'current'] else int(end)
                     if 1980 <= s_yr <= e_yr <= current_year:
                         total_duration += (e_yr - s_yr)
-                except Exception:
-                    pass
             if total_duration > 0:
                 years_exp = min(total_duration, 40.0)
 

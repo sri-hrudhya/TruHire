@@ -1,6 +1,8 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { UploadCloud, FileText, Search, BarChart3, Mail, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { UploadCloud, FileText, Search, BarChart3, Mail, ShieldCheck, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { isAdmin } from '../lib/review';
 
 // Ingestion History lives inside the Ingestion section (/ingestion/history), so "Ingestion"
 // matches its sub-routes (end: false) and stays highlighted there.
@@ -10,9 +12,12 @@ const NAV_ITEMS = [
   { name: 'Search', path: '/search', icon: Search, end: true },
   { name: 'Email', path: '/email', icon: Mail, end: true },
   { name: 'Analytics', path: '/analytics', icon: BarChart3, end: true },
+  { name: 'AI Audit', path: '/ai-audit', icon: ShieldCheck, end: true, adminOnly: true },
 ];
 
 export default function Sidebar({ collapsed = false, onToggle }) {
+  const { user } = useAuth();
+  const items = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin(user));
   return (
     <aside
       id="app-sidebar"
@@ -33,7 +38,7 @@ export default function Sidebar({ collapsed = false, onToggle }) {
         </button>
       </div>
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const Icon = item.icon;
           return (
             <NavLink

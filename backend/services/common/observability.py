@@ -14,7 +14,7 @@ def _token_subject(request: Request):
     if not auth.lower().startswith("bearer "):
         return None
     try:
-        from jose import jwt
+        import jwt
         from backend.config import settings
         return jwt.decode(auth[7:], settings.SECRET_KEY, algorithms=[settings.ALGORITHM]).get("sub")
     except Exception:

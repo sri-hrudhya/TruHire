@@ -1,3 +1,2 @@
-# LLM provider implementations (OpenRouter, Groq, Gemini).
-# Each module exposes a single chat_completion() function using the
-# OpenAI-compatible REST API via httpx — no extra SDK dependencies.
+# Cloud chat providers (OpenRouter, Groq, Gemini): see cloud.py. _openai_compat.py holds the shared
+# OpenAI-compatible HTTP call with key rotation, using httpx only (no provider SDKs).

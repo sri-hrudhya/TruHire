@@ -142,7 +142,15 @@ def clear_cache(prefix: Optional[str] = None):
                     if cursor == 0:
                         break
             else:
-                r.flushdb()
+                # Not flushdb(): the same Redis also holds queued ingestion jobs (arq:*) and rate-limit counters.
+                cursor = 0
+                while True:
+                    cursor, keys = r.scan(cursor=cursor, match="*", count=200)
+                    doomed = [k for k in keys if not k.startswith((b"arq:", b"truhire-rl", b"LIMITER", b"truhire:lock:"))]
+                    if doomed:
+                        r.delete(*doomed)
+                    if cursor == 0:
+                        break
         except Exception as exc:
             logger.warning(f"[cache] Redis clear error: {exc}")
 
@@ -152,21 +160,6 @@ def clear_cache(prefix: Optional[str] = None):
                 _in_memory_store.pop(k, None)
     else:
         _in_memory_store.clear()
-
-
-# ============================================================
-# Session Caching (Auth tokens & User profiles)
-# ============================================================
-
-def cache_user_session(user_id: str, user_dict: dict, ttl_seconds: Optional[int] = None):
-    """Caches authenticated user session data in Redis to prevent repeated DB lookups."""
-    ttl = ttl_seconds or settings.CACHE_TTL_SESSION
-    set_cache(f"truhire:session:user:{user_id}", user_dict, ttl_seconds=ttl)
-
-
-def get_cached_user_session(user_id: str) -> Optional[dict]:
-    """Retrieves user session data from Redis."""
-    return get_cache(f"truhire:session:user:{user_id}")
 
 
 # ============================================================

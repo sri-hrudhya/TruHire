@@ -73,11 +73,11 @@ def search_candidates_endpoint(req: SearchRequest, db=Depends(get_db), user: Use
     try:
         result = execute_candidate_search(db, clean_query, skills, min_exp, req.position_id, req.top_n or 20, places or None, req.role, req.demand_id)
     except CategoryNotFound:
-        raise HTTPException(status_code=404, detail="Category not found.")
+        raise HTTPException(status_code=404, detail="Category not found.") from None
     except RequirementRequired:
-        raise HTTPException(status_code=404, detail="Requirement not found.")
+        raise HTTPException(status_code=404, detail="Requirement not found.") from None
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     result.update({"active_filter_chips": skills, "min_experience": min_exp, "location": ", ".join(places) or None, "locations": places, "role": req.role, "modifier_mode": mode, "query": clean_query})
 
     state = db.query(SearchState).filter(SearchState.user_id == user.id).first()

@@ -428,7 +428,8 @@ def test_selected_requirement_plus_filters(env, retrieval):
 # --- Cache keys --------------------------------------------------------------------------------------
 
 def test_cache_key_changes_with_each_filter_and_normalizes_aliases():
-    key = lambda **kw: search_module._search_cache_key("q", ["Python"], 2.0, None, 20, F.build_filters(kw.get("location"), kw.get("role")))
+    def key(**kw):
+        return search_module._search_cache_key("q", ["Python"], 2.0, None, 20, F.build_filters(kw.get("location"), kw.get("role")))
     base = key()
     assert len({base, key(location="Pune"), key(location="Mumbai"), key(role="Backend Engineer"), key(role="Frontend Engineer"),
                 key(location="Pune", role="Backend Engineer")}) == 6

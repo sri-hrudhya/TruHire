@@ -20,7 +20,7 @@ from backend.auth import create_access_token, get_password_hash
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.main import app
-from backend.models import AIAuditEvent, Candidate, IngestionBatch, User
+from backend.models import ROLE_ADMIN, ROLE_RECRUITER, AIAuditEvent, Candidate, IngestionBatch, User
 from backend.services.common import ai_audit
 from backend.services.common.cache import clear_cache
 from backend.services.ingestion.injection_screen import screen_resume
@@ -169,9 +169,24 @@ def test_llm_and_laya_calls_are_audited_with_user_trace_and_feature(auth, monkey
         finally:
             db.close()
 
-        listed = client.get("/api/ai-audit", headers=headers, params={"feature": "jd_summary", "trace_id": llm.trace_id}).json()
-        assert listed["total"] >= 1 and all(i["feature"] == "jd_summary" for i in listed["items"])
+        # The audit trail holds every user's prompts and outputs: admins only.
+        params = {"feature": "jd_summary", "trace_id": llm.trace_id}
         assert client.get("/api/ai-audit").status_code == 401
+        recruiter = SessionLocal()
+        who = recruiter.get(User, auth["user_id"])
+        original_role = who.role
+        try:
+            who.role = ROLE_RECRUITER
+            recruiter.commit()
+            assert client.get("/api/ai-audit", headers=headers, params=params).status_code == 403
+            who.role = ROLE_ADMIN
+            recruiter.commit()
+            listed = client.get("/api/ai-audit", headers=headers, params=params).json()
+            assert listed["total"] >= 1 and all(i["feature"] == "jd_summary" for i in listed["items"])
+        finally:
+            who.role = original_role  # the shared test user keeps its real role even if an assertion failed
+            recruiter.commit()
+            recruiter.close()
     finally:
         client.delete(f"/api/job-descriptions/{jd_id}", headers=headers)
 
@@ -229,7 +244,7 @@ def _pdf(stream: bytes) -> bytes:
     xref = len(out)
     out += b"xref" + nl + b"0 6" + nl + b"0000000000 65535 f " + nl
     for off in offsets:
-        out += ("%010d 00000 n " % off).encode() + nl
+        out += (f"{off:010d} 00000 n ").encode() + nl
     return out + b"trailer<</Size 6/Root 1 0 R>>" + nl + b"startxref" + nl + str(xref).encode() + nl + b"%%EOF"
 
 

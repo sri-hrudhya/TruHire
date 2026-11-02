@@ -83,7 +83,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${BACKEND_PORT:-8999}:8999"
+      - "127.0.0.1:${BACKEND_PORT:-8999}:8999"  # nginx (the frontend container) is the public entry
     environment: &backend-env
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-truhire}:${POSTGRES_PASSWORD:-truhire_secret}@postgres:5432/${POSTGRES_DB:-truhire}
       REDIS_URL: redis://redis:6379/0
@@ -106,6 +106,8 @@ services:
       EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
       APP_ENV: ${APP_ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}  # the frontend (nginx) container is the only public entry; set to its address to be strict
       STORAGE_DIR: /app/uploads
       RESUME_STORAGE_DIR: /app/uploads/resumes
       JD_STORAGE_DIR: /app/uploads/job_descriptions

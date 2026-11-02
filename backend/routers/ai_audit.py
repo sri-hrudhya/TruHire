@@ -4,9 +4,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user
+from backend.auth import require_role
 from backend.database import get_db
-from backend.models import AIAuditEvent, User
+from backend.models import ROLE_ADMIN, AIAuditEvent, User
 
 router = APIRouter(prefix="/api/ai-audit", tags=["ai-audit"])
 
@@ -44,9 +44,8 @@ def list_ai_audit_events(
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    admin: User = Depends(require_role(ROLE_ADMIN)),  # prompts/outputs of every user: admins only
 ):
-    # TODO(roles): restrict to admins once the user model has roles.
     q = db.query(AIAuditEvent)
     for column, value in ((AIAuditEvent.feature, feature), (AIAuditEvent.status, status), (AIAuditEvent.provider, provider),
                           (AIAuditEvent.user_id, user_id), (AIAuditEvent.trace_id, trace_id)):

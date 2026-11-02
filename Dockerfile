@@ -40,5 +40,7 @@ EXPOSE 8999
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:8999/api/health || exit 1
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8999"]
+# UVICORN_WORKERS API processes share the load (each loads its own embedding model, so size RAM accordingly).
+# --proxy-headers makes the client IP come from nginx's X-Forwarded-For; FORWARDED_ALLOW_IPS lists the proxies trusted to set it.
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port 8999 --workers ${UVICORN_WORKERS:-2} --proxy-headers"]
 

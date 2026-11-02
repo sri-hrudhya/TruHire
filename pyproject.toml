@@ -12,8 +12,8 @@ dependencies = [
     "opensearch-py>=2.4.2",
     "pydantic[email]>=2.6.0",
     "pydantic-settings>=2.2.0",
-    "pypdf>=4.1.0",
-    "python-jose[cryptography]>=3.3.0",
+    "pypdf>=6.21.4",
+    "PyJWT>=2.10.1",
     "python-multipart>=0.0.9",
     "slowapi>=0.1.9",
     "sqlalchemy>=2.0.28",
@@ -31,9 +31,35 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pytest>=8.1.0",
+    "ruff>=0.8.0",
 ]
 
-[project.optional-dependencies]
-laya = [
-    "laya>=0.1.0",
+# Floors for transitive packages that have had security advisories; uv will not resolve below these.
+[tool.uv]
+constraint-dependencies = [
+    "pillow>=13.0.0",
+    "certifi>=2026.10.18",
+    "filelock>=4.2.6",
+    "pyasn1>=0.6.5",
 ]
+
+[tool.ruff]
+line-length = 160
+target-version = "py313"
+extend-exclude = [".venv", ".venv-win", "frontend", ".agent", ".agents", ".gsd"]
+
+[tool.ruff.lint]
+# F: pyflakes (unused imports/variables, redefinitions), E9: syntax errors, E711-E714/E721/E722/E731: comparison
+# and bare-except mistakes, B: bugbear (real bugs), S110/S112: silent except-pass/continue, UP: pyupgrade.
+select = ["F", "E9", "E711", "E712", "E713", "E714", "E721", "E722", "E731", "B", "S110", "S112", "UP"]
+ignore = [
+    "B008",   # FastAPI Depends() in argument defaults is the framework idiom
+    "B905",   # zip() lengths are equal by construction where it is used
+    "UP017", "UP035", "UP006", "UP007", "UP045", "UP037", "UP015", "UP012",  # typing style left as written
+]
+
+[tool.ruff.lint.per-file-ignores]
+# pypdf calls these visitor closures immediately, inside the loop iteration that defines them.
+"backend/services/ingestion/injection_screen.py" = ["B023"]
+# Shared fixtures are re-imported by name on purpose; pytest wires them by argument name.
+"tests/*" = ["F811", "F401", "E402", "B023"]

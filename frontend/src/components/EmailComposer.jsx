@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Mail, RefreshCw, Send, Sparkles } from 'lucide-react';
 import { emailApi } from '../lib/api';
 import { useMeta } from '../context/MetaContext';
+import { errorText } from '../lib/errors';
 
 
 const REQUIREMENT_STATUS_BADGE = {
@@ -29,20 +30,6 @@ export function EmailStatusBadge({ status }) {
   const s = EMAIL_STATUS[status] || { cls: 'badge-neutral', label: status };
   return <span className={`badge ${s.cls}`} style={{ fontSize: '0.7rem' }}>{s.label}</span>;
 }
-
-export const formatDateTime = (iso) => {
-  if (!iso) return '—';
-  // Backend timestamps are naive UTC.
-  const d = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
-  return d.toLocaleString();
-};
-
-const apiErrorMessage = (err, fallback) => {
-  const detail = err?.response?.data?.detail;
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) return detail.map((d) => d.msg).join('; ');
-  return err?.message || fallback;
-};
 
 const newKey = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -162,7 +149,7 @@ export default function EmailComposer({ position, recipients, onSent, onCancel }
         patch(cid, { state: 'error', error: err?.reason || 'The AI did not return a draft.' });
       }
     } catch (err) {
-      patch(cid, { state: 'error', error: apiErrorMessage(err, 'Email generation failed.') });
+      patch(cid, { state: 'error', error: errorText(err, 'Email generation failed.') });
     }
   };
 
@@ -201,7 +188,7 @@ export default function EmailComposer({ position, recipients, onSent, onCancel }
       setConfirming(false);
       onSent?.(res.data);
     } catch (err) {
-      setSendError(apiErrorMessage(err, 'Sending failed.'));
+      setSendError(errorText(err, 'Sending failed.'));
     } finally {
       setSending(false);
     }

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database import SessionLocal
-from backend.services.common.cache import clear_cache
+from backend.services.common.cache import clear_cache, get_redis_client
 from backend.models import AIAuditEvent, Candidate, CandidateAssignment, CandidateComment, CandidateMatch, Conversation, IngestionBatch, Position, RequirementCandidateStatus, SearchState
 from backend.services.ingestion.storage import delete_file_by_url_or_path
 from backend.services.retrieval.opensearch import delete_candidates_batch as delete_opensearch_batch
@@ -239,6 +239,19 @@ def get_retention_status(db: Session) -> Dict[str, Any]:
     }
 
 
+def _claim_cleanup_cycle(interval_hours: float) -> bool:
+    """With several API workers each one runs this loop; a short-lived Redis key lets exactly one of them
+    do each cycle. Without Redis (single worker) the cycle is always claimed."""
+    client = get_redis_client()
+    if client is None:
+        return True
+    try:
+        return bool(client.set("truhire:lock:retention", "1", nx=True, ex=max(60, int(interval_hours * 3600) - 300)))
+    except Exception as exc:
+        logger.warning(f"Retention lock unavailable, running the cleanup anyway: {exc}")
+        return True
+
+
 async def schedule_retention_cleanup_task() -> None:
     """
     Background worker loop that runs periodically to enforce data retention policies.
@@ -253,8 +266,10 @@ async def schedule_retention_cleanup_task() -> None:
 
     while True:
         try:
-            logger.info(f"Starting scheduled data retention cleanup (retention: {settings.DATA_RETENTION_DAYS} days)...")
-            run_retention_cleanup()
+            if _claim_cleanup_cycle(interval_hours):
+                logger.info(f"Starting scheduled data retention cleanup (retention: {settings.DATA_RETENTION_DAYS} days)...")
+                # The cleanup is blocking (database, index and file deletes): run it in a thread so API requests keep being served.
+                await asyncio.to_thread(run_retention_cleanup)
         except Exception as exc:
             logger.warning(f"Error during scheduled retention cleanup: {exc}")
 

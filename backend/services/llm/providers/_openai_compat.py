@@ -1,6 +1,6 @@
-"""Shared OpenAI-compatible chat call with API-key rotation for the cloud fallback providers.
+"""OpenAI-compatible chat call with API-key rotation, shared by every cloud fallback provider.
 
-Every configured key is tried before the provider is given up on: a timeout, connection error,
+Every configured key is tried before a provider is given up on: a timeout, connection error,
 HTTP 429/401/403/5xx on one key moves on to the next key. Keys that just failed go on a short
 cooldown so the next request does not wait on them again, and the first key tried rotates
 round-robin so load is spread across keys.
@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, Iterator, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _next_start: Dict[str, int] = {}
 _cooldown_until: Dict[str, float] = {}  # "<provider>:<key tail>" -> monotonic time
+_BAD_KEY_COOLDOWN = 600  # 401/403: the key is invalid or revoked, do not retry it soon
 
 
 def _key_id(provider: str, key: str) -> str:
@@ -46,121 +48,136 @@ def _cool_down(provider: str, key: str, seconds: float) -> None:
         _cooldown_until[_key_id(provider, key)] = time.monotonic() + seconds
 
 
-def chat_with_keys(
-    provider: str,
-    endpoint: str,
-    keys: List[str],
-    payload: Dict[str, Any],
-    *,
-    deadline: Optional[float] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-) -> str:
-    """POST the chat payload, rotating through ``keys``. ``deadline`` is a ``time.monotonic()`` instant."""
-    if not keys:
-        raise TransientLLMError(f"{provider}: no API keys configured.")
+class _KeyRun:
+    """One pass over a provider's keys under an optional overall deadline (a ``time.monotonic()`` instant)."""
 
-    last_err = f"{provider}: unknown error."
-    for key in _ordered_keys(provider, keys):
-        per_key = settings.LLM_CLOUD_KEY_TIMEOUT
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.5:
-                raise TransientLLMError(f"{provider}: overall time budget used up. Last error: {last_err}")
-            per_key = min(per_key, remaining)
-        timeout = httpx.Timeout(per_key, connect=min(settings.LLM_CONNECT_TIMEOUT, per_key))
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", **(extra_headers or {})}
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(endpoint, headers=headers, json=payload)
-        except httpx.TimeoutException:
-            last_err = f"{provider} key ...{key[-4:]} timed out after {per_key:.0f}s"
-            _cool_down(provider, key, settings.LLM_KEY_COOLDOWN_SECONDS)
-            logger.warning("%s; trying next key/provider.", last_err)
-            continue
-        except httpx.HTTPError as exc:
-            last_err = f"{provider} key ...{key[-4:]} connection error: {type(exc).__name__}"
-            _cool_down(provider, key, settings.LLM_KEY_COOLDOWN_SECONDS)
-            logger.warning("%s; trying next key/provider.", last_err)
-            continue
+    def __init__(self, provider: str, keys: List[str], deadline: Optional[float]):
+        if not keys:
+            raise TransientLLMError(f"{provider}: no API keys configured.")
+        self.provider, self.keys, self.deadline = provider, keys, deadline
+        self.last_err = f"{provider}: unknown error."
 
-        code = resp.status_code
-        if code in (401, 403) or code == 429 or code >= 500:
-            last_err = f"{provider} key ...{key[-4:]} returned HTTP {code}"
-            _cool_down(provider, key, 600 if code in (401, 403) else settings.LLM_KEY_COOLDOWN_SECONDS)
-            logger.warning("%s; trying next key/provider.", last_err)
-            continue
-        if code >= 400:
-            # Bad request / unknown model: identical on every key, so stop rotating.
-            raise RuntimeError(f"{provider} {code}: {resp.text[:300]}")
+    def __iter__(self) -> Iterator[Tuple[str, httpx.Timeout]]:
+        for key in _ordered_keys(self.provider, self.keys):
+            per_key = settings.LLM_CLOUD_KEY_TIMEOUT
+            if self.deadline is not None:
+                remaining = self.deadline - time.monotonic()
+                if remaining <= 0.5:
+                    raise TransientLLMError(f"{self.provider}: overall time budget used up. Last error: {self.last_err}")
+                per_key = min(per_key, remaining)
+            yield key, httpx.Timeout(per_key, connect=min(settings.LLM_CONNECT_TIMEOUT, per_key))
 
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            raise RuntimeError(f"{provider} returned invalid JSON: {resp.text[:300]}") from exc
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError(f"{provider} returned no choices.")
-        content = (choices[0].get("message") or {}).get("content")
-        return "" if content is None else str(content)
+    def failed(self, key: str, reason: str, cooldown: Optional[float] = None) -> None:
+        self.last_err = f"{self.provider} key ...{key[-4:]} {reason}"
+        _cool_down(self.provider, key, settings.LLM_KEY_COOLDOWN_SECONDS if cooldown is None else cooldown)
+        logger.warning("%s; trying next key/provider.", self.last_err)
 
-    raise TransientLLMError(f"{provider}: all {len(keys)} key(s) failed. Last error: {last_err}")
+    def failed_status(self, key: str, code: int) -> bool:
+        """Record a rotate-worthy HTTP status; False when the status should not rotate."""
+        if code in (401, 403):
+            self.failed(key, f"returned HTTP {code}", _BAD_KEY_COOLDOWN)
+        elif code == 429 or code >= 500:
+            self.failed(key, f"returned HTTP {code}")
+        else:
+            return False
+        return True
+
+    def failed_transport(self, key: str, exc: httpx.HTTPError, per_key: float) -> None:
+        if isinstance(exc, httpx.TimeoutException):
+            self.failed(key, f"timed out after {per_key:.0f}s")
+        else:
+            self.failed(key, f"connection error: {type(exc).__name__}")
+
+    def exhausted(self) -> TransientLLMError:
+        return TransientLLMError(f"{self.provider}: all {len(self.keys)} key(s) failed. Last error: {self.last_err}")
 
 
-def stream_with_keys(
-    provider: str,
-    endpoint: str,
-    keys: List[str],
-    payload: Dict[str, Any],
-    *,
-    deadline: Optional[float] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-) -> Iterator[str]:
-    """Streaming twin of chat_with_keys: yields reply pieces as they arrive.
+@dataclass(frozen=True)
+class CloudProvider:
+    """A cloud chat provider: endpoint, the settings holding its keys and model, optional extra headers."""
+    name: str
+    endpoint: str
+    key_settings: Tuple[str, ...]
+    model_setting: str
+    extra_headers: Tuple[Tuple[str, str], ...] = ()
 
-    Keys rotate exactly as in chat_with_keys until the first piece arrives; the timeout is the wait for
-    each piece, so a key that connects but never answers is skipped after LLM_CLOUD_KEY_TIMEOUT. Once a
-    piece has been yielded the reply is committed to that key, and a later failure ends the stream with
-    a plain RuntimeError (the router must not restart a half-delivered answer elsewhere)."""
-    if not keys:
-        raise TransientLLMError(f"{provider}: no API keys configured.")
-    payload = {**payload, "stream": True}
+    def keys(self) -> List[str]:
+        return [k.strip() for k in (getattr(settings, s) for s in self.key_settings) if k and k.strip()]
 
-    last_err = f"{provider}: unknown error."
-    for key in _ordered_keys(provider, keys):
-        per_key = settings.LLM_CLOUD_KEY_TIMEOUT
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.5:
-                raise TransientLLMError(f"{provider}: overall time budget used up. Last error: {last_err}")
-            per_key = min(per_key, remaining)
-        timeout = httpx.Timeout(per_key, connect=min(settings.LLM_CONNECT_TIMEOUT, per_key))
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", **(extra_headers or {})}
-        started_yielding = False
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                with client.stream("POST", endpoint, headers=headers, json=payload) as resp:
-                    code = resp.status_code
-                    if code in (401, 403, 429) or code >= 500:
-                        last_err = f"{provider} key ...{key[-4:]} returned HTTP {code}"
-                        _cool_down(provider, key, 600 if code in (401, 403) else settings.LLM_KEY_COOLDOWN_SECONDS)
-                        logger.warning("%s; trying next key/provider.", last_err)
-                        continue
-                    if code >= 400:
-                        raise RuntimeError(f"{provider} {code}: {resp.read().decode('utf-8', 'ignore')[:300]}")
-                    for piece in iter_text_deltas(resp):
-                        started_yielding = True
-                        yield piece
-                    if started_yielding:
-                        return
-                    last_err = f"{provider} key ...{key[-4:]} returned an empty stream"
-                    logger.warning("%s; trying next key/provider.", last_err)
-                    continue
-        except (httpx.TimeoutException, httpx.HTTPError) as exc:
-            if started_yielding:
-                raise RuntimeError(f"{provider} stream interrupted: {type(exc).__name__}") from exc
-            last_err = f"{provider} key ...{key[-4:]} " + ("timed out" if isinstance(exc, httpx.TimeoutException) else f"connection error: {type(exc).__name__}")
-            _cool_down(provider, key, settings.LLM_KEY_COOLDOWN_SECONDS)
-            logger.warning("%s; trying next key/provider.", last_err)
-            continue
+    def model_name(self) -> str:
+        return getattr(settings, self.model_setting)
 
-    raise TransientLLMError(f"{provider}: all {len(keys)} key(s) failed. Last error: {last_err}")
+    def _request(self, key: str, messages: List[Dict[str, str]], temperature: float, max_tokens: int, stream: bool) -> Tuple[Dict[str, str], Dict[str, Any]]:
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", **dict(self.extra_headers)}
+        payload = {"model": self.model_name(), "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        return headers, ({**payload, "stream": True} if stream else payload)
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        deadline: Optional[float] = None,
+        **_ignored,  # absorbs vLLM-specific kwargs (e.g. enable_thinking)
+    ) -> str:
+        run = _KeyRun(self.name, self.keys(), deadline)
+        for key, timeout in run:
+            headers, payload = self._request(key, messages, temperature, max_tokens, stream=False)
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(self.endpoint, headers=headers, json=payload)
+            except httpx.HTTPError as exc:
+                run.failed_transport(key, exc, timeout.read)
+                continue
+            if run.failed_status(key, resp.status_code):
+                continue
+            if resp.status_code >= 400:
+                # Bad request / unknown model: identical on every key, so stop rotating.
+                raise RuntimeError(f"{self.name} {resp.status_code}: {resp.text[:300]}")
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise RuntimeError(f"{self.name} returned invalid JSON: {resp.text[:300]}") from exc
+            choices = data.get("choices") or []
+            if not choices:
+                raise RuntimeError(f"{self.name} returned no choices.")
+            content = (choices[0].get("message") or {}).get("content")
+            return "" if content is None else str(content)
+        raise run.exhausted()
+
+    def chat_completion_stream(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        deadline: Optional[float] = None,
+        **_ignored,
+    ) -> Iterator[str]:
+        """Yield reply pieces as they arrive. Keys rotate as in chat_completion until the first piece; the
+        timeout is the wait for each piece, so a key that connects but never answers is skipped after
+        LLM_CLOUD_KEY_TIMEOUT. Once a piece has been yielded the reply is committed to that key and a later
+        failure ends the stream with a plain RuntimeError (the router must not restart a half-delivered answer)."""
+        run = _KeyRun(self.name, self.keys(), deadline)
+        for key, timeout in run:
+            headers, payload = self._request(key, messages, temperature, max_tokens, stream=True)
+            started = False
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    with client.stream("POST", self.endpoint, headers=headers, json=payload) as resp:
+                        if run.failed_status(key, resp.status_code):
+                            continue
+                        if resp.status_code >= 400:
+                            raise RuntimeError(f"{self.name} {resp.status_code}: {resp.read().decode('utf-8', 'ignore')[:300]}")
+                        for piece in iter_text_deltas(resp):
+                            started = True
+                            yield piece
+                        if started:
+                            return
+                        run.failed(key, "returned an empty stream")
+            except httpx.HTTPError as exc:
+                if started:
+                    raise RuntimeError(f"{self.name} stream interrupted: {type(exc).__name__}") from exc
+                run.failed_transport(key, exc, timeout.read)
+        raise run.exhausted()

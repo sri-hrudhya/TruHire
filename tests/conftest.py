@@ -2,6 +2,8 @@ import os
 
 # Unit/integration tests must never download or run the real cross-encoder model.
 os.environ.setdefault("RERANKER_ENABLED", "false")
+# Rate-limit counters must not persist in a shared Redis between test runs.
+os.environ.setdefault("RATE_LIMIT_USE_REDIS", "false")
 
 
 def _use_isolated_test_database() -> None:

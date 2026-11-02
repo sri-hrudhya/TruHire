@@ -4,7 +4,8 @@ from typing import Callable, Optional
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
 from backend.config import settings
@@ -50,8 +51,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         user_id = payload.get("sub")
         if not user_id:
             raise credentials_exception
-    except JWTError:
-        raise credentials_exception
+    except PyJWTError:
+        raise credentials_exception from None
 
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:

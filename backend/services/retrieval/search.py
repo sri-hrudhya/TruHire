@@ -10,6 +10,7 @@ from backend.config import settings
 from backend.models import Candidate, Demand, Position, CandidateMatch
 from backend.services.classification import matches_category
 from backend.services.llm import decision
+from backend.services.common.payloads import candidate_payload
 from backend.services.llm.ai_service import generate_embedding, heuristic_match_summary
 from backend.services.common.cache import get_cache, set_cache, clear_cache, get_index_epoch
 from backend.services.ingestion.pii import redact_pii
@@ -116,17 +117,6 @@ def _semantic_score(fused_row: Dict[str, float]) -> float:
     score = float(fused_row.get("vector_score", 0.0))
     floor, ceil = settings.SEMANTIC_COSINE_FLOOR, settings.SEMANTIC_COSINE_CEIL
     return max(0.0, min(1.0, (score - floor) / max(ceil - floor, 1e-6)))
-
-
-def _candidate_payload(c: Candidate) -> Dict[str, Any]:
-    return {
-        "id": c.id, "display_id": c.display_id, "candidate_name": c.candidate_name, "email": c.email, "phone": c.phone,
-        "extracted_skills": c.extracted_skills or [], "years_experience": c.years_experience,
-        "education": c.education, "status": c.status, "original_filename": c.original_filename,
-        "uploaded_at": c.uploaded_at.isoformat() if c.uploaded_at else None,
-        "resume_file_url": c.resume_file_url,
-        "location": c.location, "job_titles": c.job_titles or [],
-    }
 
 
 def _search_cache_key(query_text: str, filter_skills: Optional[List[str]], min_experience: Optional[float], position_id: Optional[str], top_n: int, filters: SearchFilters = NO_FILTERS, demand_id: Optional[str] = None) -> str:
@@ -430,7 +420,9 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
                 match = CandidateMatch(candidate_id=cand.id, position_id=target_position.id)
                 db.add(match)
             # pyrefly: ignore [parse-error]
-            match.match_score = final_score; match.score_breakdown = breakdown; match.jd_version = target_position.jd_version
+            match.match_score = final_score
+            match.score_breakdown = breakdown
+            match.jd_version = target_position.jd_version
         scored.append((cand, final_score, breakdown, match))
 
     scored.sort(key=lambda row: row[1], reverse=True)
@@ -446,7 +438,7 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         else:
             summary, quote, section = heuristic_match_summary(cand.extracted_skills or [], cand.years_experience, safe_jd, target_position.title)
 
-        results.append({"candidate": _candidate_payload(cand), "match_score": score, "score_breakdown": breakdown, "llm_summary": summary, "cited_quote": quote, "cited_section": section})
+        results.append({"candidate": candidate_payload(cand), "match_score": score, "score_breakdown": breakdown, "llm_summary": summary, "cited_quote": quote, "cited_section": section})
 
     db.commit()
     if persist_matches:

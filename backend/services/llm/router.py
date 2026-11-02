@@ -15,13 +15,16 @@ seconds, then probed again by the next request. When the DGX answers, it is firs
 
 Text sent to a cloud provider is PII-redacted first (LLM_CLOUD_REDACT_PII).
 Embeddings are not routed here; they use local_embeddings.py.
+
+chat_completion returns the whole reply; chat_completion_stream yields it in pieces as it is written.
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from typing import Any, Dict, Iterator, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, Iterator, List, Optional
 
 import httpx
 
@@ -30,6 +33,7 @@ from backend.services.common import ai_audit
 from backend.services.ingestion.pii import redact_pii
 from backend.services.llm import vllm as _vllm
 from backend.services.llm.errors import TransientLLMError
+from backend.services.llm.providers._openai_compat import CloudProvider
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +64,42 @@ def _vllm_failed() -> None:
                            _vllm_failures, settings.LLM_VLLM_BREAKER_COOLDOWN)
 
 
-def _cloud_providers() -> List[Tuple[str, Any]]:
-    """Providers that have at least one key, in priority order. Imports are deferred."""
-    from backend.services.llm.providers import gemini, groq, openrouter
-
-    out = []
-    for name, module in (("openrouter", openrouter), ("groq", groq), ("gemini", gemini)):
-        if module._keys():
-            out.append((name, module))
-    return out
+@dataclass
+class _CloudPlan:
+    """What a cloud fallback needs: providers with keys, the redacted messages, and the audit prompt."""
+    providers: List[CloudProvider]
+    messages: List[Dict[str, str]]
+    prompt_text: str
 
 
-def _redacted(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    if not settings.LLM_CLOUD_REDACT_PII:
-        return messages
-    return [{**m, "content": redact_pii(m.get("content") or "")} for m in messages]
+def _plan_cloud(messages: List[Dict[str, str]], last_exc: Exception) -> _CloudPlan:
+    from backend.services.llm.providers.cloud import CHAIN
+
+    providers = [p for p in CHAIN if p.keys()]
+    if not providers:
+        raise TransientLLMError(
+            "vLLM (DGX) is unavailable and no cloud provider keys are configured. "
+            "Set OPENROUTER_API_KEY_1, GROQ_API_KEY_1 or GEMINI_API_KEY_1 in .env."
+        ) from last_exc
+    safe = messages if not settings.LLM_CLOUD_REDACT_PII else [{**m, "content": redact_pii(m.get("content") or "")} for m in messages]
+    return _CloudPlan(providers, safe, "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in safe))
+
+
+def _audit_cloud(provider: CloudProvider, plan: _CloudPlan, started: float, *, output: Optional[str], error: Optional[str] = None, streamed: bool = False) -> None:
+    ai_audit.record(
+        provider=provider.name, model=provider.model_name(), status="error" if error else "ok", prompt=plan.prompt_text,
+        output=output or None, latency_ms=(time.perf_counter() - started) * 1000, error=error,
+        details=None if error else {"fallback": True, "streamed": streamed, "pii_redacted": settings.LLM_CLOUD_REDACT_PII},
+    )
+
+
+def _vllm_timeout() -> httpx.Timeout:
+    wait = min(settings.LLM_VLLM_CHAT_TIMEOUT, settings.LLM_TOTAL_TIMEOUT)
+    return httpx.Timeout(wait, connect=min(settings.LLM_CONNECT_TIMEOUT, wait))
+
+
+def _all_failed(last_exc: Exception) -> TransientLLMError:
+    return TransientLLMError(f"All LLM providers failed. Last error: {last_exc}. Check DGX connectivity and cloud API keys/quotas.")
 
 
 def chat_completion(
@@ -89,15 +114,9 @@ def chat_completion(
     last_exc: Exception = TransientLLMError("No LLM provider is available.")
 
     if _vllm_available():
-        wait = min(settings.LLM_VLLM_CHAT_TIMEOUT, settings.LLM_TOTAL_TIMEOUT)
         try:
-            result = _vllm.chat_completion(
-                messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                enable_thinking=enable_thinking,
-                timeout=httpx.Timeout(wait, connect=min(settings.LLM_CONNECT_TIMEOUT, wait)),
-            )
+            result = _vllm.chat_completion(messages, temperature=temperature, max_tokens=max_tokens,
+                                           enable_thinking=enable_thinking, timeout=_vllm_timeout())
             _vllm_succeeded()
             return result
         except TransientLLMError as exc:
@@ -107,36 +126,22 @@ def chat_completion(
     else:
         logger.info("vLLM skipped (circuit open); using cloud providers.")
 
-    providers = _cloud_providers()
-    if not providers:
-        raise TransientLLMError(
-            "vLLM (DGX) is unavailable and no cloud provider keys are configured. "
-            "Set OPENROUTER_API_KEY_1, GROQ_API_KEY_1 or GEMINI_API_KEY_1 in .env."
-        ) from last_exc
-
-    safe_messages = _redacted(messages)
-    prompt_text = "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in safe_messages)
-    for name, module in providers:
+    plan = _plan_cloud(messages, last_exc)
+    for provider in plan.providers:
         started = time.perf_counter()
         try:
-            logger.info("Trying cloud provider: %s", name)
-            result = module.chat_completion(safe_messages, temperature=temperature, max_tokens=max_tokens, deadline=deadline)
+            logger.info("Trying cloud provider: %s", provider.name)
+            result = provider.chat_completion(plan.messages, temperature=temperature, max_tokens=max_tokens, deadline=deadline)
         except RuntimeError as exc:  # TransientLLMError is a RuntimeError; a hard error on one provider still tries the next
-            ai_audit.record(provider=name, model=module.model_name(), status="error", prompt=prompt_text,
-                            latency_ms=(time.perf_counter() - started) * 1000, error=str(exc)[:500])
-            logger.warning("Provider %s failed (%s); trying next.", name, str(exc)[:200])
+            _audit_cloud(provider, plan, started, output=None, error=str(exc)[:500])
+            logger.warning("Provider %s failed (%s); trying next.", provider.name, str(exc)[:200])
             last_exc = exc
             if time.monotonic() >= deadline:
                 break
             continue
-        ai_audit.record(provider=name, model=module.model_name(), prompt=prompt_text, output=result,
-                        latency_ms=(time.perf_counter() - started) * 1000,
-                        details={"fallback": True, "pii_redacted": settings.LLM_CLOUD_REDACT_PII})
+        _audit_cloud(provider, plan, started, output=result)
         return result
-
-    raise TransientLLMError(
-        f"All LLM providers failed. Last error: {last_exc}. Check DGX connectivity and cloud API keys/quotas."
-    ) from last_exc
+    raise _all_failed(last_exc) from last_exc
 
 
 def chat_completion_stream(
@@ -156,12 +161,9 @@ def chat_completion_stream(
     delivered = False
 
     if _vllm_available():
-        wait = min(settings.LLM_VLLM_CHAT_TIMEOUT, settings.LLM_TOTAL_TIMEOUT)
         try:
-            for piece in _vllm.chat_completion_stream(
-                messages, temperature=temperature, max_tokens=max_tokens, enable_thinking=enable_thinking,
-                timeout=httpx.Timeout(wait, connect=min(settings.LLM_CONNECT_TIMEOUT, wait)),
-            ):
+            for piece in _vllm.chat_completion_stream(messages, temperature=temperature, max_tokens=max_tokens,
+                                                      enable_thinking=enable_thinking, timeout=_vllm_timeout()):
                 delivered = True
                 yield piece
             _vllm_succeeded()
@@ -175,38 +177,24 @@ def chat_completion_stream(
     else:
         logger.info("vLLM skipped (circuit open); using cloud providers.")
 
-    providers = _cloud_providers()
-    if not providers:
-        raise TransientLLMError(
-            "vLLM (DGX) is unavailable and no cloud provider keys are configured. "
-            "Set OPENROUTER_API_KEY_1, GROQ_API_KEY_1 or GEMINI_API_KEY_1 in .env."
-        ) from last_exc
-
-    safe_messages = _redacted(messages)
-    prompt_text = "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in safe_messages)
-    for name, module in providers:
+    plan = _plan_cloud(messages, last_exc)
+    for provider in plan.providers:
         started = time.perf_counter()
         parts: List[str] = []
         try:
-            logger.info("Trying cloud provider (streaming): %s", name)
-            for piece in module.chat_completion_stream(safe_messages, temperature=temperature, max_tokens=max_tokens, deadline=deadline):
+            logger.info("Trying cloud provider (streaming): %s", provider.name)
+            for piece in provider.chat_completion_stream(plan.messages, temperature=temperature, max_tokens=max_tokens, deadline=deadline):
                 parts.append(piece)
                 yield piece
         except RuntimeError as exc:
-            ai_audit.record(provider=name, model=module.model_name(), status="error", prompt=prompt_text, output="".join(parts) or None,
-                            latency_ms=(time.perf_counter() - started) * 1000, error=str(exc)[:500])
+            _audit_cloud(provider, plan, started, output="".join(parts), error=str(exc)[:500], streamed=True)
             if parts:
                 raise  # half-delivered: cannot restart elsewhere
-            logger.warning("Provider %s failed (%s); trying next.", name, str(exc)[:200])
+            logger.warning("Provider %s failed (%s); trying next.", provider.name, str(exc)[:200])
             last_exc = exc
             if time.monotonic() >= deadline:
                 break
             continue
-        ai_audit.record(provider=name, model=module.model_name(), prompt=prompt_text, output="".join(parts),
-                        latency_ms=(time.perf_counter() - started) * 1000,
-                        details={"fallback": True, "streamed": True, "pii_redacted": settings.LLM_CLOUD_REDACT_PII})
+        _audit_cloud(provider, plan, started, output="".join(parts), streamed=True)
         return
-
-    raise TransientLLMError(
-        f"All LLM providers failed. Last error: {last_exc}. Check DGX connectivity and cloud API keys/quotas."
-    ) from last_exc
+    raise _all_failed(last_exc) from last_exc

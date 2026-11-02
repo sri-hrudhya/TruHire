@@ -162,10 +162,6 @@ def _points(candidate_id: str, vectors: List[List[float]], payload: Dict[str, An
     ]
 
 
-def upsert_candidate(candidate_id: str, vectors: List[List[float]], payload: Dict[str, Any]) -> None:
-    upsert_candidates_batch([(candidate_id, vectors, payload)])
-
-
 def upsert_candidates_batch(items: List[tuple]) -> None:
     """items: (candidate_id, [chunk vectors], payload). Existing points for those
     candidates (including legacy single-vector points) are removed first so a

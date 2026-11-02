@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Eye, History, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { emailApi, jdApi } from '../lib/api';
-import EmailComposer, { EMAILABLE_STATUSES, EmailStatusBadge, RecipientSelector, formatDateTime } from '../components/EmailComposer';
+import EmailComposer, { EMAILABLE_STATUSES, EmailStatusBadge, RecipientSelector } from '../components/EmailComposer';
 import { STORAGE_KEYS } from '../config/env';
-
-const errorText = (err, fallback) => err?.response?.data?.detail || err?.message || fallback;
+import { errorText } from '../lib/errors';
+import { formatDateTime } from '../lib/requirements';
 
 // Remember the chosen requirement and recipients for the browser session so leaving the page and coming
 // back (or a refresh) does not wipe them. Storage can be unavailable, so every access is guarded.

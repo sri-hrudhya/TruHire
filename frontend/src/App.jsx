@@ -16,6 +16,8 @@ import SearchPage from './pages/SearchPage';
 import CandidateDetailPage from './pages/CandidateDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import EmailPage from './pages/EmailPage';
+import AIAuditPage from './pages/AIAuditPage';
+import { isAdmin } from './lib/review';
 import { DEFAULT_ROUTE } from './lib/navigation';
 import { STORAGE_KEYS } from './config/env';
 
@@ -33,6 +35,11 @@ function readSidebarPref() {
 }
 
 // Protected layout wrapper
+function AdminOnly({ children }) {
+  const { user } = useAuth();
+  return isAdmin(user) ? children : <Navigate to={DEFAULT_ROUTE} replace />;
+}
+
 function ProtectedLayout() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
@@ -96,6 +103,7 @@ export default function App() {
               <Route path="/email" element={<EmailPage />} />
               <Route path="/candidates/:id" element={<CandidateDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/ai-audit" element={<AdminOnly><AIAuditPage /></AdminOnly>} />
             </Route>
 
             <Route path="*" element={<Navigate to={DEFAULT_ROUTE} replace />} />

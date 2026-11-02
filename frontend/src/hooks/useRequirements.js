@@ -3,16 +3,10 @@ import { useSearchParams } from 'react-router-dom';
 import { demandApi, jdApi, retentionApi, reviewApi, usersApi } from '../lib/api';
 import { resolveActiveCategory } from '../lib/categories';
 import { sortByStatus } from '../lib/requirements';
+import { errorText } from '../lib/errors';
 import { assignmentsByCandidate, isAdmin } from '../lib/review';
 import { TIMEOUTS_MS } from '../config/env';
 import { useAuth } from '../context/AuthContext';
-
-// FastAPI sends a string for its own errors and a list of { msg } objects for request validation errors.
-const errorText = (err, fallback) => {
-  const detail = err?.response?.data?.detail;
-  if (Array.isArray(detail)) return detail.map((d) => d?.msg).filter(Boolean).join(' ') || fallback;
-  return (typeof detail === 'string' && detail) || fallback;
-};
 
 // All data and actions of the Requirements page: the list, the selected requirement, its ranked matches,
 // and the review workflow (status, assignment). The page itself only composes components.
