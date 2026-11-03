@@ -141,11 +141,36 @@ export function filterDemands(items, query) {
     || (qId && squashId(j.display_id).includes(qId)));
 }
 
-// Client line for a folder card: up to two names, then "+N more"; "No client" when none is stated.
-export function clientSummary(clients, unassigned = 0) {
-  const names = clients || [];
-  if (names.length === 0) return 'No client';
-  const shown = names.slice(0, 2).join(', ');
-  const more = names.length > 2 ? ` +${names.length - 2} more` : '';
-  return `${shown}${more}${unassigned > 0 ? ` (+${unassigned} unassigned)` : ''}`;
+// The URL value for demands that name no client.
+export const UNASSIGNED_CLIENT = '__unassigned__';
+export const clientKey = (jd) => (jd?.client_name || '').trim();
+export const inClient = (jd, name) => (name === UNASSIGNED_CLIENT ? !clientKey(jd) : clientKey(jd).toLocaleLowerCase() === (name || '').toLocaleLowerCase());
+
+// Client folders from a list of demands: { name ('' = none), items, cancelled, practices: Map(practiceId -> count) },
+// alphabetical with the unassigned folder last. Client names that differ only by case share one folder.
+export function groupByClient(jds) {
+  const groups = new Map();
+  for (const jd of jds) {
+    const key = clientKey(jd).toLocaleLowerCase();
+    if (!groups.has(key)) groups.set(key, { name: clientKey(jd), items: [], cancelled: 0, practices: new Map() });
+    const group = groups.get(key);
+    group.items.push(jd);
+    if (jd.status === CANCELLED) group.cancelled += 1;
+    else group.practices.set(jd.demand_id, (group.practices.get(jd.demand_id) || 0) + 1);
+  }
+  return [...groups.values()].sort((a, b) => (!a.name) - (!b.name) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+// Table sections for the list view: [{ key, label, items }] by practice name or client name; items keep their order.
+export function groupRows(jds, by, practiceName) {
+  const label = (jd) => (by === 'client' ? clientKey(jd) || 'No client assigned' : practiceName(jd.demand_id) || 'No practice assigned');
+  const groups = new Map();
+  for (const jd of jds) {
+    const name = label(jd);
+    const key = name.toLocaleLowerCase();
+    if (!groups.has(key)) groups.set(key, { key, label: name, items: [] });
+    groups.get(key).items.push(jd);
+  }
+  const last = (g) => /^no (client|practice) assigned$/i.test(g.label);
+  return [...groups.values()].sort((a, b) => last(a) - last(b) || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 }

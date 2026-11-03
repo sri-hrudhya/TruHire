@@ -7,16 +7,16 @@ import './requirements.css';
 
 const Fact = ({ label, children }) => <div><dt>{label}</dt><dd>{children}</dd></div>;
 
-// One card per demand of the chosen practice, already in status order. The whole card opens the demand; the copy icon
+// One card per demand of the chosen practice (or client, with `scope="client"`), already in status order. The whole card opens the demand; the copy icon
 // starts a new demand from it and the bin removes it. The search box filters this practice only, by demand ID or title (partial, any case).
-export default function JdCards({ jds, loading, onOpen, onDelete, onDuplicate, onCreate }) {
+export default function JdCards({ jds, loading, scope = 'practice', practiceName, onOpen, onDelete, onDuplicate, onCreate }) {
   const [query, setQuery] = useState('');
   const shown = filterDemands(jds, query);
 
   if (jds.length === 0) {
     return (
       <p className="req-empty">
-        {loading ? 'Loading demands…' : 'No demands in this practice yet.'}
+        {loading ? 'Loading demands…' : `No demands in this ${scope} yet.`}
         {!loading && <button type="button" className="link-btn" onClick={onCreate}>Create one</button>}
       </p>
     );
@@ -30,8 +30,8 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onDuplicate, o
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search this practice by demand ID or title"
-          aria-label="Search demands in this practice by ID or title"
+          placeholder={`Search this ${scope} by demand ID or title`}
+          aria-label={`Search demands in this ${scope} by ID or title`}
         />
         {query && <span className="slug" role="status">{shown.length} of {jds.length}</span>}
       </div>
@@ -52,6 +52,7 @@ export default function JdCards({ jds, loading, onOpen, onDelete, onDuplicate, o
                     <Fact label="Client">{jd.client_name || '—'}</Fact>
                     <Fact label="Positions">{formatPositions(jd.no_of_positions)}</Fact>
                   </div>
+                  {practiceName && <div className="info-card-row"><Fact label="Practice">{practiceName(jd.demand_id) || '—'}</Fact></div>}
                   {showRole(jd) && <div className="info-card-row"><Fact label="Role">{jd.role}</Fact></div>}
                   <div className="info-card-row">
                     <Fact label="Locations">{formatLocations(jd)}</Fact>

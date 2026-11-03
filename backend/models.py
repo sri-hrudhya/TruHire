@@ -195,6 +195,7 @@ class Conversation(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     user = relationship("User", back_populates="conversations")
     messages = relationship("ConversationMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationMessage.created_at")
+    demand_sessions = relationship("AssistantDemandSession", back_populates="conversation", cascade="all, delete-orphan")
 
 
 class ConversationMessage(Base):
@@ -206,6 +207,29 @@ class ConversationMessage(Base):
     message_data = Column("metadata", JSON, default=dict, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     conversation = relationship("Conversation", back_populates="messages")
+
+
+DEMAND_SESSION_ACTIVE = ("choose_mode", "collecting", "review", "creating")
+
+
+class AssistantDemandSession(Base):
+    """One guided "create a demand" workflow inside an assistant conversation. The server owns the state (mode, current
+    field, collected values); the chat model never decides which field comes next. Scoped to the user who started it."""
+    __tablename__ = "assistant_demand_sessions"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    conversation_id = Column(String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="choose_mode")  # choose_mode | collecting | review | creating | created | cancelled
+    input_mode = Column(String, nullable=True)  # all_fields | step_by_step; NULL until chosen
+    current_field = Column(String, nullable=True)
+    values = Column(JSON, nullable=False, default=dict)  # validated values by API field name
+    sources = Column(JSON, nullable=False, default=dict)  # field -> document | user | skipped
+    errors = Column(JSON, nullable=False, default=dict)  # field -> message from the last failed answer
+    source_document = Column(JSON, nullable=True)  # {filename, file_url, notes}
+    created_position_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    conversation = relationship("Conversation", back_populates="demand_sessions")
 
 
 CANDIDATE_STATUSES = ("New", "Shortlisted", "Interviewed", "Rejected")  # global pipeline stage of a candidate

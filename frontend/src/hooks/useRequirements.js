@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { demandApi, jdApi, retentionApi, reviewApi, usersApi } from '../lib/api';
+import { demandApi, jdApi, reviewApi, usersApi } from '../lib/api';
 import { resolveActiveCategory } from '../lib/categories';
 import { sortByStatus } from '../lib/requirements';
 import { errorText } from '../lib/errors';
@@ -19,6 +19,7 @@ export default function useRequirements() {
   const [creating, setCreating] = useState(false);
   const [template, setTemplate] = useState(null);  // the demand a new one is being copied from
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);  // set when the requirement list could not be fetched
   const [notice, setNotice] = useState(null);
 
   const [matches, setMatches] = useState([]);
@@ -29,13 +30,16 @@ export default function useRequirements() {
 
   const [assignments, setAssignments] = useState({});
   const [users, setUsers] = useState([]);
-  const [retention, setRetention] = useState(null);
 
   const demandId = resolveActiveCategory(demands, searchParams.get('demand'));
   const clientName = searchParams.get('client') || '';
+  const groupBy = searchParams.get('group') === 'client' ? 'client' : 'practice';
 
   const loadDemands = useCallback(async () => {
-    try { setDemands((await demandApi.list()).data); } catch (err) { console.error('Failed to load categories:', err); }
+    try { setDemands((await demandApi.list()).data); } catch (err) {
+      console.error('Failed to load categories:', err);
+      setLoadError(errorText(err, 'Could not load practices.'));
+    }
   }, []);
 
   const loadAssignments = useCallback(async (jdId) => {
@@ -48,7 +52,7 @@ export default function useRequirements() {
       const res = await jdApi.getMatches(jdId, undefined);
       setMatches(res.data?.matches || []);
       if (typeof res.data?.min_match_score === 'number') setMinMatchScore(res.data.min_match_score);
-      setCoverage({ unindexed: res.data?.unindexed_candidates || 0, lexicalDown: res.data?.retrieval ? !res.data.retrieval.lexical : false });
+      setCoverage({ unindexed: res.data?.unindexed_candidates || 0, lexicalDown: res.data?.retrieval?.lexical_available === false });
     } catch (err) {
       console.error('Failed to load matches for requirement:', err);
       setMatches([]);
@@ -127,13 +131,26 @@ export default function useRequirements() {
     setSearchParams(next, { replace: true });
   };
 
+  // Practice-wise (default) or client-wise landing. Switching starts again from the top level of the chosen grouping.
+  const setGroupBy = (mode) => {
+    const next = new URLSearchParams(searchParams);
+    if (mode === 'client') next.set('group', 'client'); else next.delete('group');
+    ['demand', 'client', 'id', 'view'].forEach((key) => next.delete(key));
+    setSelectedJd(null);
+    setCreating(false);
+    setMatches([]);
+    setSearchParams(next, { replace: true });
+  };
+
   const loadJDs = useCallback(async () => {
+    setLoadError(null);
     try {
       const res = await jdApi.list();
       setJds(res.data);
       return res.data;
     } catch (err) {
       console.error('Failed to load requirements:', err);
+      setLoadError(errorText(err, 'Could not load requirements.'));
       return [];
     } finally {
       setLoading(false);
@@ -145,7 +162,6 @@ export default function useRequirements() {
     (async () => {
       const list = await loadJDs();
       loadDemands();
-      retentionApi.getStatus().then((r) => setRetention(r.data)).catch(() => {});
       const wanted = list.find((jd) => jd.id === searchParams.get('id'));
       if (wanted) selectJd(wanted);
     })();
@@ -283,17 +299,6 @@ export default function useRequirements() {
     }
   };
 
-  const runRetentionCleanup = async () => {
-    try {
-      const res = await retentionApi.cleanup();
-      setRetention((await retentionApi.getStatus()).data);
-      await loadJDs();
-      setNotice({ type: 'success', message: `Retention cleanup removed ${res.data.total_candidates_deleted} resume(s) and ${res.data.total_jds_deleted} requirement(s).` });
-    } catch (err) {
-      setNotice({ type: 'error', message: `Retention cleanup failed: ${errorText(err, 'unknown error')}` });
-    }
-  };
-
   const openJdFile = async (jdId) => {
     // Opened synchronously inside the click so popup blockers allow it, then pointed at the blob.
     const tab = window.open('', '_blank');
@@ -309,10 +314,10 @@ export default function useRequirements() {
   };
 
   return {
-    user, jds, visibleJds, demands, demandId, setDemand, clientName, setClient, selectedJd, creating, template, loading, notice, setNotice,
-    matches, loadingMatches, minMatchScore, coverage, statusError, assignments, users, retention,
+    user, jds, visibleJds, demands, demandId, setDemand, clientName, setClient, selectedJd, creating, template, loading, loadError, loadJDs, loadDemands, notice, setNotice, groupBy, setGroupBy,
+    matches, loadingMatches, minMatchScore, coverage, statusError, assignments, users,
     historyOpen, showHistory, closeJd, changeJdStatus, changeEndDate,
-    selectJd, startCreate, loadMatches, changeStatus, assign, saveJd, summarize, removeJd, runRetentionCleanup, openJdFile,
+    selectJd, startCreate, loadMatches, changeStatus, assign, saveJd, summarize, removeJd, openJdFile,
     setSelectedJd, setCreating,
   };
 }

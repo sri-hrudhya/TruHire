@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { changedDetails, clientSummary, filterDemands, sortByStatus, detailsPayload, showRole, formatDate, formatExperience, formatLocations, formatPositions, jdLocations, historyChanges, validateDetails } from '../src/lib/requirements.js';
+import { changedDetails, groupByClient, groupRows, inClient, UNASSIGNED_CLIENT, filterDemands, sortByStatus, detailsPayload, showRole, formatDate, formatExperience, formatLocations, formatPositions, jdLocations, historyChanges, validateDetails } from '../src/lib/requirements.js';
 import { MAX_NOTICE_DAYS, freshness, formatNotice, noticePayload } from '../src/lib/ingestion.js';
 import { explainScore, skillComparison } from '../src/lib/scoreExplanation.js';
 import { FALLBACK_META } from '../src/lib/meta.js';
@@ -166,9 +166,36 @@ run('folder search matches partial ID or title, ignoring case and punctuation', 
   assert.equal(filterDemands(jds, 'zzz').length, 0);
 });
 
-run('client summary handles none, one, several and partly missing', () => {
-  assert.equal(clientSummary([], 3), 'No client');
-  assert.equal(clientSummary(['Acme']), 'Acme');
-  assert.equal(clientSummary(['Acme', 'Globex', 'Initech', 'Umbrella']), 'Acme, Globex +2 more');
-  assert.equal(clientSummary(['Acme'], 2), 'Acme (+2 unassigned)');
+const GROUPED = [
+  { id: 'a', demand_id: 'p-java', client_name: 'Infosys', status: 'Open' },
+  { id: 'b', demand_id: 'p-pega', client_name: ' infosys ', status: 'Cancelled' },
+  { id: 'c', demand_id: 'p-pega', client_name: 'Coforge', status: 'Open' },
+  { id: 'd', demand_id: 'p-java', client_name: null, status: 'Open' },
+  { id: 'e', demand_id: null, client_name: '', status: 'Mapped' },
+];
+const practiceOf = (id) => ({ 'p-java': 'Java', 'p-pega': 'Pega' })[id];
+
+run('client folders merge names by case, count cancelled apart and put no-client last', () => {
+  const folders = groupByClient(GROUPED);
+  assert.deepEqual(folders.map((f) => f.name), ['Coforge', 'Infosys', '']);
+  const infosys = folders[1];
+  assert.equal(infosys.items.length, 2);
+  assert.equal(infosys.cancelled, 1);
+  assert.deepEqual([...infosys.practices.entries()], [['p-java', 1]]);
+  assert.equal(folders[2].items.length, 2);
+  assert.deepEqual(groupByClient([]), []);
+});
+
+run('inClient matches a name in any case and the unassigned marker', () => {
+  assert.equal(inClient(GROUPED[1], 'INFOSYS'), true);
+  assert.equal(inClient(GROUPED[2], 'Infosys'), false);
+  assert.equal(inClient(GROUPED[3], UNASSIGNED_CLIENT), true);
+  assert.equal(inClient(GROUPED[0], UNASSIGNED_CLIENT), false);
+});
+
+run('list view sections group by practice or client, unassigned last', () => {
+  const byPractice = groupRows(GROUPED, 'practice', practiceOf);
+  assert.deepEqual(byPractice.map((g) => [g.label, g.items.length]), [['Java', 2], ['Pega', 2], ['No practice assigned', 1]]);
+  const byClient = groupRows(GROUPED, 'client', practiceOf);
+  assert.deepEqual(byClient.map((g) => [g.label, g.items.length]), [['Coforge', 1], ['Infosys', 2], ['No client assigned', 2]]);
 });

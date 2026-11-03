@@ -113,14 +113,6 @@ export const usersApi = {
   list: () => api.get('/users'),
 };
 
-export const retentionApi = {
-  getStatus: () => api.get('/retention/status'),
-  cleanup: (retentionDays = null) => {
-    const url = retentionDays ? `/retention/cleanup?retention_days=${retentionDays}` : '/retention/cleanup';
-    return api.post(url);
-  },
-};
-
 export const requirementHistoryApi = {
   list: (params = {}) => api.get('/requirement-history', { params }),
 };
@@ -143,8 +135,16 @@ export const assistantApi = {
   listConversations: () => api.get('/assistant/conversations'),
   getConversation: (id) => api.get(`/assistant/conversations/${id}`),
   clearConversations: () => api.delete('/assistant/conversations'),
-  send: (data) => api.post('/assistant/message', data, { timeout: TIMEOUTS_MS.search }),
-  confirmJd: (data) => api.post('/assistant/confirm-jd', data, { timeout: TIMEOUTS_MS.jdFilters }),
+  // Guided demand creation: the server holds the workflow, each call returns { session, messages }.
+  demandSession: {
+    start: (conversationId) => api.post('/assistant/demand-sessions', { conversation_id: conversationId || null }),
+    get: (id) => api.get(`/assistant/demand-sessions/${id}`),
+    act: (id, action, body = {}) => api.post(`/assistant/demand-sessions/${id}/${action}`, body, { timeout: TIMEOUTS_MS.jdFilters }),
+    attach: (id, formData) => api.post(`/assistant/demand-sessions/${id}/document`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: TIMEOUTS_MS.jdFilters,
+    }),
+  },
   upload: (formData) => api.post('/assistant/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: TIMEOUTS_MS.jdFilters,

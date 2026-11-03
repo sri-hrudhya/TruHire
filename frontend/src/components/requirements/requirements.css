@@ -252,3 +252,21 @@
 .req-table-title { min-width: 14rem; max-width: 24rem; }
 .req-table-title .link-btn { text-align: left; }
 .req-table-actions { width: 1%; }
+
+/* Group-by control beside the list-view button: two exclusive buttons in one outline. */
+.group-switch { display: inline-flex; align-items: center; gap: var(--space-2); }
+.group-switch-label { font-size: var(--text-sm); color: var(--text-muted); white-space: nowrap; }
+.group-switch-options { display: inline-flex; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; background: var(--bg-surface); }
+.group-switch-options button { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 0; background: transparent; color: var(--text-main); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.group-switch-options button + button { border-left: 1px solid var(--border-color); }
+.group-switch-options button:hover { background: var(--bg-subtle); }
+.group-switch-options button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+.group-switch-options button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+@media (max-width: 600px) { .group-switch-label { display: none; } }
+
+.req-table tbody tr.req-table-group, .req-table tbody tr.req-table-group:hover { background: var(--bg-subtle); }
+.req-table-group th { position: sticky; left: 0; font-weight: 700; }
+.req-table-group .slug { margin-left: var(--space-2); font-weight: 400; }
+
+.req-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-surface); }
+.req-error p { margin: 0; }

@@ -19,12 +19,12 @@ export default function DemandCards({ demands, loading, onOpen, onCreate }) {
       {demands.length === 0 && <li className="landing-note"><p className="req-empty">{loading ? 'Loading demands…' : 'No demand practices are available.'}</p></li>}
       {demands.map((d) => (
         <li key={d.id}>
-          <button type="button" className="card card-hover info-card folder-card" onClick={() => onOpen(d.id)} aria-label={`${d.name}, ${d.position_count || 0} demand${d.position_count === 1 ? '' : 's'}`}>
+          <button type="button" className="card card-hover info-card folder-card" onClick={() => onOpen(d.id)} aria-label={`${d.name}, ${d.jd_count || 0} demand${d.jd_count === 1 ? '' : 's'}`}>
             <span className="info-card-title folder-card-title"><Layers size={20} aria-hidden="true" /> {d.name}</span>
             <dl className="info-card-facts">
               {d.created_by_name && <div><dt>Created By</dt><dd>{d.created_by_name}</dd></div>}
             </dl>
-            <span className="info-card-count"><span className="info-card-count-num">{d.position_count || 0}</span> {d.position_count === 1 ? 'demand' : 'demands'}</span>
+            <span className="info-card-count"><span className="info-card-count-num">{d.jd_count || 0}</span> {d.jd_count === 1 ? 'demand' : 'demands'}</span>
           </button>
         </li>
       ))}

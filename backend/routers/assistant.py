@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
@@ -11,16 +11,16 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import SessionLocal, get_db
-from backend.models import Conversation, ConversationMessage, DEFAULT_DEMAND_NAMES, Position, User, canonical_demand_id
+from backend.models import Conversation, ConversationMessage, Position, User
+from backend.routers import assistant_demand
 from backend.routers.ingestion import process_batch
-from backend.routers.job_descriptions import JD_FILTER_EXTRACTOR_VERSION, PositionCreateRequest, create_jd
-from backend.services.classification import classify_jd_detailed
 from backend.services.ingestion.doc_kind import detect_document_kind
 from backend.services.ingestion.parsing import YEARS_EXP_PATTERN, extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import save_upload_file
 from backend.services.llm.ai_service import untrusted
+from backend.services.llm.assistant_context import GLOSSARY, RULES, build_data_context
 from backend.services.llm.router import chat_completion, chat_completion_stream
-from backend.services.llm.scope import REFUSAL, SCOPE_RULE, is_in_scope
+from backend.services.llm.scope import GREETING_REPLY, REFUSAL, SCOPE_RULE, is_greeting, is_in_scope
 from backend.services.common import ai_audit
 from backend.services.retrieval.search import execute_candidate_search
 from backend.services.retrieval.filters import extract_jd_filters
@@ -29,31 +29,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 
 _JD_ID = re.compile(r"\bTRU-JD-\d+\b", re.I)
+HISTORY_MESSAGES = 6  # recent turns sent to the model; older ones are not needed to follow the thread
+HISTORY_MESSAGE_CHARS = 1500
 
 
 class AssistantMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=12000)
     conversation_id: Optional[str] = None
     position_id: Optional[str] = None
-
-
-class AssistantConfirmJDRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
-    jd_text: str = Field(..., min_length=1, max_length=100000)
-    demand_id: str
-    position_count: Optional[int] = Field(default=None, ge=0, le=10000)
-    role: Optional[str] = Field(default=None, max_length=200)
-    location: Optional[str] = Field(default=None, max_length=2000)
-    locations: Optional[List[str]] = None
-    experience_years: Optional[float] = Field(default=None, ge=0, le=60)
-    experience_max_years: Optional[float] = Field(default=None, ge=0, le=60)
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    client_name: Optional[str] = Field(default=None, max_length=200)
-    work_mode: Optional[str] = Field(default=None, pattern=r"^(remote|hybrid|onsite)$")
-    conversation_id: Optional[str] = None
-    file_url: Optional[str] = None
-    original_filename: Optional[str] = None
 
 
 def _conversation(db: Session, user: User, conversation_id: Optional[str]) -> Conversation:
@@ -164,6 +147,8 @@ def _demand_count_action(db: Session, message: str) -> Optional[tuple]:
     names_records = re.search(r"\b(demands?|requirements?|job\s+descriptions?|jds?)\b", lower)
     if not asks_count or not names_records:
         return None
+    if re.search(r"\b(practices?|clients?|per|each|breakdown|group(?:ed)?)\b", lower):
+        return None  # a breakdown or a practice/client question: the model answers from the full counts
 
     stop = {
         "how", "many", "number", "of", "count", "the", "are", "is", "there", "in", "on", "for",
@@ -341,15 +326,10 @@ def _json_reply(messages: List[Dict[str, str]]) -> str:
 
 def _generic_messages(db: Session, request: AssistantMessageRequest, conversation: Conversation) -> List[Dict[str, str]]:
     history = [
-        {"role": m.role, "content": m.content}
-        for m in conversation.messages[-8:]
+        {"role": m.role, "content": m.content[:HISTORY_MESSAGE_CHARS]}
+        for m in conversation.messages[-HISTORY_MESSAGES:]
         if m.role in ("user", "assistant")
     ]
-    positions = [{"id": p.id, "display_id": p.display_id, "title": p.title, "demand": p.demand.name if p.demand else None,
-                 "role": p.role, "location": p.location, "experience_years": p.experience_years,
-                 "experience_max_years": p.experience_max_years, "no_of_positions": p.no_of_positions,
-                 "jd_text": (p.jd_text or "")[:2000]}
-                for p in db.query(Position).order_by(Position.created_at.desc()).limit(10).all()]
     raw_upload = next((m.message_data for m in reversed(conversation.messages)
                           if m.role == "assistant" and (m.message_data or {}).get("action") == "confirm_jd"), None)
     recent_upload = None
@@ -357,14 +337,17 @@ def _generic_messages(db: Session, request: AssistantMessageRequest, conversatio
         draft = raw_upload.get("draft") or {}
         recent_upload = {"title": draft.get("title"), "filename": draft.get("original_filename"),
                          "field_report": raw_upload.get("field_report"), "jd_text": (draft.get("jd_text") or "")[:4000]}
-    context = json.dumps({"saved_requirements": positions, "most_recent_uploaded_jd": recent_upload}, ensure_ascii=True, default=str)
+    data = build_data_context(db, request.message, request.position_id)
+    if recent_upload:
+        data["most_recent_uploaded_jd"] = recent_upload
     prompt = (
         "You are the TruHire recruitment assistant. Help with resumes, demand documents, candidate matching, "
-        "and email drafting. Answer questions about uploaded or saved JDs from the supplied context. For field checks, "
-        "separate fields explicitly found from fields not stated; never present a guess as extracted. Never invent candidate facts. If the user asks to create a demand, ask for a fixed demand "
-        "choice instead of creating it automatically. Keep answers concise and actionable.\n"
+        "and email drafting. For field checks on a JD, separate fields explicitly found from fields not stated; "
+        "never present a guess as extracted. Never invent candidate facts. If the user asks to create a demand, ask for a fixed demand "
+        "choice instead of creating it automatically.\n"
+        f"{GLOSSARY}\n{RULES}\n"
         f"{SCOPE_RULE}\n"
-        f"Available requirements: {context}\n"
+        f"DATA: {json.dumps(data, ensure_ascii=True, default=str)}\n"
         f"User request: {untrusted('user_request', request.message)}"
     )
     return [{"role": "system", "content": prompt}, *history]
@@ -409,8 +392,10 @@ def get_conversation(conversation_id: str, db: Session = Depends(get_db), user: 
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == user.id).first()
     if not conversation:
         raise HTTPException(404, "Conversation not found.")
+    session = assistant_demand.active_session(db, user, conversation.id)
     return {
         "id": conversation.id,
+        "demand_session": assistant_demand.view(db, session) if session else None,
         "messages": [
             {"id": m.id, "role": m.role, "content": m.content, "data": m.message_data or {}}
             for m in conversation.messages
@@ -418,10 +403,13 @@ def get_conversation(conversation_id: str, db: Session = Depends(get_db), user: 
     }
 
 
-def _route_message(db: Session, request: AssistantMessageRequest) -> Optional[tuple]:
+def _route_message(db: Session, request: AssistantMessageRequest, user: User, conversation: Conversation) -> Optional[tuple]:
     """Deterministic assistant actions. Returns (reply, data), or None when the message is a free-text
     question that needs the LLM."""
     lower = request.message.lower()
+
+    if is_greeting(request.message):
+        return GREETING_REPLY, {"action": "reply"}
 
     client_action = _client_demand_action(db, request.message)
     if client_action:
@@ -450,20 +438,12 @@ def _route_message(db: Session, request: AssistantMessageRequest) -> Optional[tu
     ):
         reply = "This looks like a resume. Attach the file with the paperclip and I will ingest it; I do not create demands from resumes."
         data = {"action": "reply"}
-    elif "job description" in lower or "create a jd" in lower or "create demand" in lower or (
-        len(request.message) > 180 and is_in_scope(request.message)
-    ):
-        title = next((line.strip() for line in request.message.splitlines() if line.strip()), "Uploaded Job Description")[:200]
-        classification = classify_jd_detailed(title, request.message)
-        field_report = _jd_field_report(title, request.message)
-        reply = "I’ve read the demand. I’ll ask about any key details I couldn’t find, then you can choose where to file it."
-        data = {
-            "action": "confirm_jd",
-            "draft": {**field_report["values"], "title": field_report["values"].get("title") or title, "jd_text": request.message},
-            "suggested_demand": classification.category if classification.confident else None,
-            "field_report": field_report,
-            "demands": [{"id": canonical_demand_id(name), "name": name} for name in DEFAULT_DEMAND_NAMES],
-        }
+    elif assistant_demand.wants_new_demand(request.message) or (len(request.message) > 180 and is_in_scope(request.message)):
+        # A short request starts the guided form; a long pasted JD starts it with the details read from the text.
+        pasted = len(request.message) > 180
+        session, messages = assistant_demand.begin(db, user, conversation, text=request.message if pasted else None, persist=False)
+        reply = "\n\n".join(m["content"] for m in messages)
+        data = {"action": "demand_session", "session": assistant_demand.view(db, session)}
     else:
         return None  # free-text question for the LLM
     return reply, data
@@ -489,9 +469,7 @@ def assistant_message(
     if routed is None and _field_request(request.message):
         routed = _field_report_for_request(db, conversation, request)
     if routed is None:
-        routed = _route_message(db, request)
-    if routed is None and _out_of_scope(request, conversation):
-        routed = (REFUSAL, {"action": "reply"})
+        routed = _route_message(db, request, user, conversation)
     if routed is None:
         routed = (_generic_reply(db, request, conversation), {"action": "reply"})
     return _finish(db, conversation, *routed)
@@ -518,9 +496,7 @@ def assistant_message_stream(
     if routed is None and _field_request(request.message):
         routed = _field_report_for_request(db, conversation, request)
     if routed is None:
-        routed = _route_message(db, request)
-    if routed is None and _out_of_scope(request, conversation):
-        routed = (REFUSAL, {"action": "reply"})
+        routed = _route_message(db, request, user, conversation)
     if routed is not None:
         done = _finish(db, conversation, *routed)
         return StreamingResponse(iter([_sse("done", done)]), media_type="text/event-stream")
@@ -548,45 +524,6 @@ def assistant_message_stream(
             yield _sse("done", _finish(save_db, conv, reply, {"action": "reply"}))
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@router.post("/confirm-jd")
-def confirm_jd(request: AssistantConfirmJDRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    if request.demand_id not in {canonical_demand_id(name) for name in DEFAULT_DEMAND_NAMES}:
-        raise HTTPException(422, "Choose one of: " + ", ".join(DEFAULT_DEMAND_NAMES) + ".")
-    if request.start_date is None or request.end_date is None:
-        missing = []
-        if request.start_date is None:
-            missing.append("start date")
-        if request.end_date is None:
-            missing.append("tentative end date")
-        raise HTTPException(422, "Please provide the " + " and ".join(missing) + " before creating this requirement.")
-    conversation = db.query(Conversation).filter(Conversation.id == request.conversation_id, Conversation.user_id == user.id).first() if request.conversation_id else None
-    if request.conversation_id and not conversation:
-        raise HTTPException(404, "Assistant conversation not found.")
-    created = create_jd(PositionCreateRequest(
-        title=request.title,
-        jd_text=request.jd_text,
-        demand_id=request.demand_id,
-        no_of_positions=request.position_count if request.position_count is not None else 1,
-        role=request.role,
-        location=request.location,
-        locations=request.locations or ([request.location] if request.location else None),
-        experience_years=request.experience_years,
-        experience_max_years=request.experience_max_years,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        client_name=request.client_name,
-        file_url=request.file_url,
-        original_filename=request.original_filename,
-    ), db, user, source="assistant", work_mode=request.work_mode)
-    client_note = f" for {created.client_name}" if created.client_name else ""
-    response = {"action": "created", "position": {"id": created.id, "display_id": created.display_id, "title": created.title, "demand_id": created.demand_id, "client_name": created.client_name, "no_of_positions": created.no_of_positions}, "message": f"Created {created.display_id} · {created.title}{client_note} in the selected demand."}
-    if conversation:
-        _save_message(db, conversation, "assistant", response["message"], response)
-        conversation.updated_at = __import__("datetime").datetime.utcnow()
-        db.commit()
-    return response
 
 
 @router.post("/upload")
@@ -624,10 +561,9 @@ async def assistant_upload(
             raise HTTPException(400, "No readable text found in the uploaded demand document.")
         file_url, _ = save_upload_file(filename, content, category="job_descriptions")
         title = filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()[:200] or "Uploaded Job Description"
-        classification = classify_jd_detailed(title, text)
-        report = _jd_field_report(title, text)
-        data = {"action": "confirm_jd", "reply": f"I’ve read {filename}. I’ll check the details I found with you, then ask about anything important that’s missing.", "draft": {**report["values"], "title": report["values"].get("title") or title, "jd_text": text, "file_url": file_url, "original_filename": filename}, "suggested_demand": classification.category if classification.confident else None, "field_report": report, "demands": [{"id": canonical_demand_id(name), "name": name} for name in DEFAULT_DEMAND_NAMES]}
-        _save_message(db, conversation, "assistant", data["reply"], data)
+        session, messages = assistant_demand.begin(db, user, conversation, title=title, text=text, filename=filename, file_url=file_url, persist=False)
+        data = {"action": "demand_session", "reply": "\n\n".join(m["content"] for m in messages), "session": assistant_demand.view(db, session)}
+        _save_message(db, conversation, "assistant", data["reply"], {"action": "demand_session"})
         conversation.updated_at = __import__("datetime").datetime.utcnow()
         db.commit()
         return {"conversation_id": conversation.id, **data}

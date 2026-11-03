@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, History, LayoutGrid, List } from 'lucide-react';
+import { Building2, ChevronRight, History, LayoutGrid, Layers, List } from 'lucide-react';
 import useRequirements from '../hooks/useRequirements';
 import Notice from '../components/ui/Notice';
 import ResumePreviewModal from '../components/ResumePreviewModal';
@@ -13,7 +13,7 @@ import RequirementHistory from '../components/requirements/RequirementHistory';
 import RequirementEditor from '../components/requirements/RequirementEditor';
 import RequirementMatches from '../components/requirements/RequirementMatches';
 import { DeleteRequirementModal, EmailShortlistModal } from '../components/requirements/RequirementModals';
-import { sortByStatus } from '../lib/requirements';
+import { UNASSIGNED_CLIENT, inClient, sortByStatus } from '../lib/requirements';
 import '../components/requirements/requirements.css';
 
 const TABS = (count) => [['details', 'Details'], ['matches', `Candidates (${count})`]];
@@ -29,10 +29,15 @@ export default function JobDescriptionsPage() {
   const [view, setView] = useState('cards');  // 'cards' or 'list' (spreadsheet-style table)
 
   const jd = r.selectedJd;
-  const demand = r.demands.find((d) => d.id === r.demandId);
-  const clientJds = r.visibleJds.filter((item) => r.clientName === '__unassigned__'
-    ? !item.client_name?.trim()
-    : item.client_name?.trim().toLocaleLowerCase() === r.clientName.toLocaleLowerCase());
+  const byClient = r.groupBy === 'client';
+  // Client-wise, the practice in the URL (kept so a requirement still opens in its practice) does not narrow the list.
+  const demand = byClient ? null : r.demands.find((d) => d.id === r.demandId);
+  const clientSource = byClient ? sortByStatus(r.jds) : r.visibleJds;
+  const clientJds = r.clientName ? clientSource.filter((item) => inClient(item, r.clientName)) : clientSource;
+  const clientLabel = r.clientName === UNASSIGNED_CLIENT ? 'No client assigned' : r.clientName;
+  const plural = (n) => `${n} ${n === 1 ? 'demand' : 'demands'}`;
+  const listError = r.loadError && (!r.jds.length || !r.demands.length);
+  const retryLoad = () => { r.loadJDs(); r.loadDemands(); };
   const forEmail = r.matches.map((m) => ({
     ...m.candidate, match_score: m.match_score, requirement_status: m.requirement_status, last_email: m.last_email,
   }));
@@ -52,9 +57,13 @@ export default function JobDescriptionsPage() {
 
   const crumbs = [{ label: 'Requirements', onClick: () => r.setDemand(null) }];
   if (r.historyOpen) crumbs.push({ label: 'Requirement History' });
-  else {
+  else if (byClient) {
+    if (r.clientName) crumbs.push({ label: clientLabel, onClick: jd || r.creating ? () => r.setClient(r.clientName) : undefined });
+    if (r.creating) crumbs.push({ label: 'New demand' });
+    else if (jd) crumbs.push({ label: jd.title });
+  } else {
     if (demand) crumbs.push({ label: demand.name, onClick: r.clientName || jd || r.creating ? () => r.setDemand(demand.id) : undefined });
-    if (r.clientName) crumbs.push({ label: r.clientName === '__unassigned__' ? 'No client assigned' : r.clientName, onClick: jd || r.creating ? () => r.setClient(r.clientName) : undefined });
+    if (r.clientName) crumbs.push({ label: clientLabel, onClick: jd || r.creating ? () => r.setClient(r.clientName) : undefined });
     if (r.creating) crumbs.push({ label: 'New demand' });
     else if (jd) crumbs.push({ label: jd.title });
   }
@@ -66,6 +75,15 @@ export default function JobDescriptionsPage() {
           <h1 className="page-header-title">Requirements</h1>
         </div>
         <span className="cluster">
+          {!r.historyOpen && (
+            <span className="group-switch" role="group" aria-label="Group requirements by">
+              <span className="group-switch-label" aria-hidden="true">Group by</span>
+              <span className="group-switch-options">
+                <button type="button" onClick={() => r.setGroupBy('practice')} aria-pressed={!byClient}><Layers size={15} aria-hidden="true" /> Practice</button>
+                <button type="button" onClick={() => r.setGroupBy('client')} aria-pressed={byClient}><Building2 size={15} aria-hidden="true" /> Client</button>
+              </span>
+            </span>
+          )}
           {!r.historyOpen && (
             <button type="button" className="btn btn-secondary" onClick={toggleView} aria-pressed={view === 'list'}>
               {view === 'list' ? <><LayoutGrid size={16} /> Card view</> : <><List size={16} /> List view</>}
@@ -96,7 +114,7 @@ export default function JobDescriptionsPage() {
         ) : r.creating ? (
           <>
             <div className="section-head"><h2>{r.template ? 'Duplicate demand' : 'New demand'}</h2></div>
-            <RequirementEditor key={r.template ? `copy-${r.template.id}` : 'new'} jd={null} creating template={r.template} defaultDemandId={r.demandId} demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
+            <RequirementEditor key={r.template ? `copy-${r.template.id}` : 'new'} jd={null} creating template={r.template} defaultDemandId={byClient ? '' : r.demandId} demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} />
           </>
         ) : jd ? (
           <>
@@ -143,13 +161,19 @@ export default function JobDescriptionsPage() {
               />
             )}
           </>
-        ) : view === 'list' && (!demand || r.clientName) ? (
+        ) : listError ? (
+          <div className="req-error" role="alert">
+            <p>{r.loadError}</p>
+            <button type="button" className="btn btn-secondary btn-compact" onClick={retryLoad}>Try again</button>
+          </div>
+        ) : view === 'list' && (byClient || !demand || r.clientName) ? (
           <>
-            {demand && <div className="section-head"><h2>{demand.name}</h2></div>}
+            {(demand || r.clientName) && <div className="section-head"><h2>{r.clientName ? clientLabel : demand.name}</h2></div>}
             <JdTable
-              key={demand?.id || 'all'}
-              jds={demand ? clientJds : sortByStatus(r.jds)}
+              key={`${r.groupBy}-${demand?.id || 'all'}-${r.clientName}`}
+              jds={demand || r.clientName ? clientJds : sortByStatus(r.jds)}
               loading={r.loading}
+              groupBy={byClient ? (r.clientName ? 'practice' : 'client') : (demand ? undefined : 'practice')}
               practiceName={practiceName}
               onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
               onDelete={setDeleting}
@@ -157,18 +181,25 @@ export default function JobDescriptionsPage() {
               onCreate={create}
             />
           </>
+        ) : byClient && !r.clientName ? (
+          <>
+            <div className="section-head"><h2>Clients <span className="slug">{plural(r.jds.filter((item) => item.status !== 'Cancelled').length)}</span></h2><button type="button" className="btn btn-primary" onClick={create}>New demand</button></div>
+            <ClientCards jds={r.jds} loading={r.loading} practiceName={practiceName} label="Clients" emptyText="No demands yet." onOpen={(name) => r.setClient(name || UNASSIGNED_CLIENT)} />
+          </>
         ) : demand && !r.clientName && r.visibleJds.length > 0 ? (
           <>
             <div className="section-head"><h2>{demand.name} <span className="slug">Clients · {r.visibleJds.length} {r.visibleJds.length === 1 ? 'demand' : 'demands'}</span></h2><button type="button" className="btn btn-primary" onClick={create}>New demand</button></div>
-            <ClientCards jds={r.visibleJds} loading={r.loading} onOpen={(name) => r.setClient(name || '__unassigned__')} />
+            <ClientCards jds={r.visibleJds} loading={r.loading} onOpen={(name) => r.setClient(name || UNASSIGNED_CLIENT)} />
           </>
-        ) : demand ? (
+        ) : byClient || demand ? (
           <>
-            <div className="section-head"><h2>{r.clientName ? (r.clientName === '__unassigned__' ? 'No client assigned' : r.clientName) : demand.name}<span className="slug">{r.clientName ? ` · ${clientJds.length} ${clientJds.length === 1 ? 'demand' : 'demands'}` : ` · ${demand.jd_count} ${demand.jd_count === 1 ? 'demand' : 'demands'}${r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}`}</span></h2></div>
+            <div className="section-head"><h2>{r.clientName ? clientLabel : demand.name}<span className="slug">{r.clientName ? ` · ${plural(clientJds.length)}` : ` · ${plural(demand.jd_count)}${r.visibleJds.length > demand.jd_count ? ` · ${r.visibleJds.length} including cancelled` : ''}`}</span></h2></div>
             <JdCards
-              key={`${demand.id}-${r.clientName}`}
+              key={`${r.groupBy}-${demand?.id}-${r.clientName}`}
               jds={r.clientName ? clientJds : r.visibleJds}
               loading={r.loading}
+              scope={byClient ? 'client' : 'practice'}
+              practiceName={byClient ? practiceName : undefined}
               onOpen={(item) => { r.selectJd(item); setTab('details'); setEditing(false); }}
               onDelete={setDeleting}
               onDuplicate={duplicate}

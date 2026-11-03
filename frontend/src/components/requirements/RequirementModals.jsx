@@ -31,37 +31,6 @@ export function DeleteRequirementModal({ jd, onConfirm, onClose }) {
   );
 }
 
-export function RetentionModal({ retention, onCleanup, onClose }) {
-  const [busy, setBusy] = useState(false);
-  const run = async () => { setBusy(true); await onCleanup(); setBusy(false); };
-  const rows = [
-    ['Retention period', `${retention?.data_retention_days} days`],
-    ['Cleanup runs every', `${retention?.cleanup_interval_hours} hours`],
-    ['Resumes past retention', retention?.expired_candidates_count || 0],
-    ['Requirements past retention', retention?.expired_positions_count || 0],
-  ];
-  return (
-    <Modal
-      title="Data retention"
-      size="sm"
-      busy={busy}
-      onClose={onClose}
-      footer={(
-        <>
-          <button type="button" className="btn btn-secondary" onClick={run} disabled={busy}>
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />} Run cleanup now
-          </button>
-          <button type="button" className="btn btn-primary" onClick={onClose}>Close</button>
-        </>
-      )}
-    >
-      <dl className="kv">
-        {rows.map(([k, v]) => (<div key={k}><dt>{k}</dt><dd>{v}</dd></div>))}
-      </dl>
-    </Modal>
-  );
-}
-
 export function EmailShortlistModal({ jd, candidates, onSent, onClose }) {
   const [step, setStep] = useState('select');
   const [selected, setSelected] = useState(() => candidates.filter((c) => c.email).map((c) => c.id));

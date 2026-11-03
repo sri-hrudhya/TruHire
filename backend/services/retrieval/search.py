@@ -449,14 +449,15 @@ def execute_candidate_search(db: Session, query_text: str = "", filter_skills: O
         empty_reason = {"code": "category_excluded_all",
                         "message": f"{after_filters} candidate(s) matched the query, but none looks like a {scope_category} profile. Try a broader keyword or pick All categories."}
     warnings = []
-    if not lexical_rows and get_opensearch_client() is None:
+    lexical_available = get_opensearch_client() is not None
+    if not lexical_available:
         warnings.append("Keyword index (OpenSearch) is unavailable; results are ranked by vector similarity" + ("" if vector_rows else " or the stored candidate list") + " only.")
     if not vector_rows and not fused:
         warnings.append("Vector index (Qdrant) returned nothing; results come from the stored candidate list.")
     response = {"total_matches": len(scored), "empty_reason": empty_reason, "warnings": warnings, "top_n": limit, "results": results,
             "filters": _filter_report(db, filters, excluded_missing, excluded_mismatch),
             "scored_against_jd": ({"id": base_position.id, "title": base_position.title, "version": base_position.jd_version} if base_position else None),
-            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "fit_calls": fit_calls}}
+            "retrieval": {"vector": bool(vector_rows), "lexical": bool(lexical_rows), "lexical_available": lexical_available, "hybrid": bool(vector_rows and lexical_rows), "reranker": reranked_by_bge, "fit_calls": fit_calls}}
     set_cache(cache_key, response, settings.CACHE_TTL_SEARCH)
     logger.info(
         "search query=%r position=%s skills=%s min_exp=%s filters=%s matches=%s returned=%s vector=%s lexical=%s reranker=%s fit_calls=%s duration_ms=%s",

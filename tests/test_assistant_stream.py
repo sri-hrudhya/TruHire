@@ -63,7 +63,7 @@ def test_failure_before_any_text_gives_the_help_message(ctx, monkeypatch):
         raise RuntimeError("all providers down")
         yield
     monkeypatch.setattr(assistant, "chat_completion_stream", dead)
-    events = _events(client.post("/api/assistant/message/stream", json={"message": "hello there"}, headers=headers).text)
+    events = _events(client.post("/api/assistant/message/stream", json={"message": "explain how candidate scoring works"}, headers=headers).text)
     assert [n for n, _ in events] == ["done"] and "ingest resumes" in events[0][1]["reply"]
 
 
@@ -73,5 +73,5 @@ def test_interrupted_answer_keeps_partial_text_and_reports_error(ctx, monkeypatc
         yield "Partial answer"
         raise RuntimeError("stream interrupted")
     monkeypatch.setattr(assistant, "chat_completion_stream", half)
-    events = _events(client.post("/api/assistant/message/stream", json={"message": "hello there"}, headers=headers).text)
+    events = _events(client.post("/api/assistant/message/stream", json={"message": "explain how candidate scoring works"}, headers=headers).text)
     assert [n for n, _ in events] == ["token", "error", "done"] and events[-1][1]["reply"] == "Partial answer"

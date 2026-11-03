@@ -70,7 +70,7 @@ def _upload(client, headers, name, text):
 
 def test_upload_without_a_type_goes_to_the_right_flow(ctx):
     client, headers, *_ = ctx
-    assert _upload(client, headers, "opening.txt", JD)["action"] == "confirm_jd"
+    assert _upload(client, headers, "opening.txt", JD)["action"] == "demand_session"
     assert _upload(client, headers, "asha.txt", RESUME)["action"] == "resume_ingestion"
 
 
@@ -79,4 +79,4 @@ def test_pasted_resume_is_not_turned_into_a_demand(ctx):
     r = client.post("/api/assistant/message", json={"message": RESUME}, headers=headers).json()
     assert r["action"] == "reply" and "looks like a resume" in r["reply"]
     r = client.post("/api/assistant/message", json={"message": JD}, headers=headers).json()
-    assert r["action"] == "confirm_jd"
+    assert r["action"] == "demand_session"

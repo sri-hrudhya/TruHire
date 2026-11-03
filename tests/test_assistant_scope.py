@@ -55,12 +55,39 @@ def test_scope_rule_is_in_the_model_prompt(monkeypatch):
         r = client.post("/api/assistant/message/stream", json={"message": "explain how scoring works"}, headers=headers)
         assert r.status_code == 200 and seen
         assert SCOPE_RULE in seen[0][0]["content"]
-        # Off-topic: refused without ever calling the model, on both endpoints.
-        seen.clear()
-        for path in ("/api/assistant/message/stream", "/api/assistant/message"):
-            r = client.post(path, json={"message": "what's the captial of Indai?"}, headers=headers)
-            assert r.status_code == 200 and REFUSAL in r.text
-        assert seen == []
+        # Terse messages like "practices" reach the model (no keyword gate), carrying the scope rule and the data.
+        for text in ("practices", "no.of practices", "total practices"):
+            seen.clear()
+            r = client.post("/api/assistant/message/stream", json={"message": text}, headers=headers)
+            assert r.status_code == 200 and REFUSAL not in r.text and seen
+            prompt = seen[0][0]["content"]
+            assert SCOPE_RULE in prompt and '"practices"' in prompt and "terse" in prompt.lower()
+    finally:
+        ids = [c.id for c in db.query(Conversation).filter(Conversation.user_id == user.id).all()]
+        db.query(ConversationMessage).filter(ConversationMessage.conversation_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Conversation).filter(Conversation.user_id == user.id).delete(synchronize_session=False)
+        db.delete(user)
+        db.commit()
+        db.close()
+
+
+def test_greetings_get_a_friendly_reply_without_the_model(monkeypatch):
+    from backend.services.llm.scope import is_greeting
+    assert all(is_greeting(t) for t in ("hey", "Hello!", "hi there", "good morning"))
+    assert not is_greeting("hey tell me a joke")
+    seen = []
+    monkeypatch.setattr(assistant, "chat_completion_stream", lambda messages, **k: seen.append(messages) or iter(["x"]))
+    db = SessionLocal()
+    user = User(email=f"greet-{uuid.uuid4().hex[:6]}@truhire.com", name="Greeter", hashed_password=get_password_hash("pass12345"))
+    db.add(user)
+    db.commit()
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {create_access_token({'sub': user.id})}"}
+    try:
+        for text in ("hey", "hey how are you"):
+            r = client.post("/api/assistant/message/stream", json={"message": text}, headers=headers)
+            assert r.status_code == 200 and REFUSAL not in r.text
+        assert "create demands" in client.post("/api/assistant/message", json={"message": "hey"}, headers=headers).json()["reply"]
     finally:
         ids = [c.id for c in db.query(Conversation).filter(Conversation.user_id == user.id).all()]
         db.query(ConversationMessage).filter(ConversationMessage.conversation_id.in_(ids)).delete(synchronize_session=False)

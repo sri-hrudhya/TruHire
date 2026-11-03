@@ -1,14 +1,17 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Copy, Plus, Search, Trash2 } from 'lucide-react';
-import { filterDemands, formatDate, formatExperience, formatLocations, formatPositions } from '../../lib/requirements';
+import { filterDemands, groupRows, formatDate, formatExperience, formatLocations, formatPositions } from '../../lib/requirements';
 import JdStatusBadge from './JdStatusBadge';
 import './requirements.css';
 
 // Spreadsheet-style view of demands: one row per demand, one column per detail.
 // `practiceName` maps a demand's practice id to its name (shown as a column, since the rows can span practices).
-export default function JdTable({ jds, loading, practiceName, onOpen, onDelete, onDuplicate, onCreate }) {
+// `groupBy` ('practice' or 'client') splits the rows into labelled sections, each with its own count.
+export default function JdTable({ jds, loading, groupBy, practiceName, onOpen, onDelete, onDuplicate, onCreate }) {
   const [query, setQuery] = useState('');
   const shown = filterDemands(jds, query);
+  const sections = groupBy ? groupRows(shown, groupBy, practiceName) : [{ key: 'all', label: null, items: shown }];
+  const columns = 14;
 
   return (
     <div className="stack">
@@ -48,28 +51,37 @@ export default function JdTable({ jds, loading, practiceName, onOpen, onDelete, 
               </tr>
             </thead>
             <tbody>
-              {shown.map((jd) => (
-                <tr key={jd.id}>
-                  <td className="nowrap">{jd.display_id || '—'}</td>
-                  <td className="req-table-title"><button type="button" className="link-btn" onClick={() => onOpen(jd)}>{jd.title}</button></td>
-                  <td className="nowrap">{practiceName(jd.demand_id) || '—'}</td>
-                  <td>{jd.client_name || '—'}</td>
-                  <td>{formatLocations(jd)}</td>
-                  <td className="nowrap">{formatExperience(jd.experience_years, jd.experience_max_years)}</td>
-                  <td className="num">{formatPositions(jd.no_of_positions)}</td>
-                  <td className="nowrap"><JdStatusBadge status={jd.status} /></td>
-                  <td className="nowrap">{formatDate(jd.start_date)}</td>
-                  <td className="nowrap">{formatDate(jd.end_date)}</td>
-                  <td>{jd.created_by_name || '—'}</td>
-                  <td className="nowrap">{formatDate(jd.created_at)}</td>
-                  <td className="nowrap">{formatDate(jd.last_modified_at || jd.created_at)}{jd.last_modified_by ? ` · ${jd.last_modified_by}` : ''}</td>
-                  <td className="nowrap req-table-actions">
-                    <span className="cluster cluster-tight">
-                      <button type="button" className="icon-btn" onClick={() => onDuplicate(jd)} aria-label={`Duplicate ${jd.title}`} title="Duplicate this demand"><Copy size={14} /></button>
-                      <button type="button" className="icon-btn" onClick={() => onDelete(jd)} aria-label={`Remove ${jd.title}`} title="Remove this demand"><Trash2 size={14} /></button>
-                    </span>
-                  </td>
-                </tr>
+              {sections.map((section) => (
+                <Fragment key={section.key}>
+                  {section.label && (
+                    <tr className="req-table-group">
+                      <th scope="rowgroup" colSpan={columns}>{section.label} <span className="slug">{section.items.length} {section.items.length === 1 ? 'demand' : 'demands'}</span></th>
+                    </tr>
+                  )}
+                  {section.items.map((jd) => (
+                    <tr key={jd.id}>
+                      <td className="nowrap">{jd.display_id || '—'}</td>
+                      <td className="req-table-title"><button type="button" className="link-btn" onClick={() => onOpen(jd)}>{jd.title}</button></td>
+                      <td className="nowrap">{practiceName(jd.demand_id) || '—'}</td>
+                      <td>{jd.client_name || '—'}</td>
+                      <td>{formatLocations(jd)}</td>
+                      <td className="nowrap">{formatExperience(jd.experience_years, jd.experience_max_years)}</td>
+                      <td className="num">{formatPositions(jd.no_of_positions)}</td>
+                      <td className="nowrap"><JdStatusBadge status={jd.status} /></td>
+                      <td className="nowrap">{formatDate(jd.start_date)}</td>
+                      <td className="nowrap">{formatDate(jd.end_date)}</td>
+                      <td>{jd.created_by_name || '—'}</td>
+                      <td className="nowrap">{formatDate(jd.created_at)}</td>
+                      <td className="nowrap">{formatDate(jd.last_modified_at || jd.created_at)}{jd.last_modified_by ? ` · ${jd.last_modified_by}` : ''}</td>
+                      <td className="nowrap req-table-actions">
+                        <span className="cluster cluster-tight">
+                          <button type="button" className="icon-btn" onClick={() => onDuplicate(jd)} aria-label={`Duplicate ${jd.title}`} title="Duplicate this demand"><Copy size={14} /></button>
+                          <button type="button" className="icon-btn" onClick={() => onDelete(jd)} aria-label={`Remove ${jd.title}`} title="Remove this demand"><Trash2 size={14} /></button>
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
           </table>
