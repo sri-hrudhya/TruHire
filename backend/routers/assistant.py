@@ -17,10 +17,10 @@ from backend.routers.ingestion import process_batch
 from backend.services.ingestion.doc_kind import detect_document_kind
 from backend.services.ingestion.parsing import YEARS_EXP_PATTERN, extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import save_upload_file
-from backend.services.llm.ai_service import untrusted
-from backend.services.llm.assistant_context import GLOSSARY, RULES, build_data_context
+from backend.services.llm.assistant_context import build_data_context
+from backend.services.llm.assistant_prompt import build_system_prompt
 from backend.services.llm.router import chat_completion, chat_completion_stream
-from backend.services.llm.scope import GREETING_REPLY, REFUSAL, SCOPE_RULE, is_greeting, is_in_scope
+from backend.services.llm.scope import GREETING_REPLY, REFUSAL, is_greeting, is_in_scope
 from backend.services.common import ai_audit
 from backend.services.retrieval.search import execute_candidate_search
 from backend.services.retrieval.filters import extract_jd_filters
@@ -340,16 +340,7 @@ def _generic_messages(db: Session, request: AssistantMessageRequest, conversatio
     data = build_data_context(db, request.message, request.position_id)
     if recent_upload:
         data["most_recent_uploaded_jd"] = recent_upload
-    prompt = (
-        "You are the TruHire recruitment assistant. Help with resumes, demand documents, candidate matching, "
-        "and email drafting. For field checks on a JD, separate fields explicitly found from fields not stated; "
-        "never present a guess as extracted. Never invent candidate facts. If the user asks to create a demand, ask for a fixed demand "
-        "choice instead of creating it automatically.\n"
-        f"{GLOSSARY}\n{RULES}\n"
-        f"{SCOPE_RULE}\n"
-        f"DATA: {json.dumps(data, ensure_ascii=True, default=str)}\n"
-        f"User request: {untrusted('user_request', request.message)}"
-    )
+    prompt = build_system_prompt(data)
     return [{"role": "system", "content": prompt}, *history]
 
 
@@ -465,6 +456,8 @@ def assistant_message(
 ):
     conversation = _conversation(db, user, request.conversation_id)
     _save_message(db, conversation, "user", request.message)
+    if _out_of_scope(request, conversation):
+        return _finish(db, conversation, REFUSAL, {"action": "reply"})
     routed = _demand_count_action(db, request.message)
     if routed is None and _field_request(request.message):
         routed = _field_report_for_request(db, conversation, request)
@@ -492,6 +485,9 @@ def assistant_message_stream(
     conversation = _conversation(db, user, request.conversation_id)
     conversation_id = conversation.id
     _save_message(db, conversation, "user", request.message)
+    if _out_of_scope(request, conversation):
+        done = _finish(db, conversation, REFUSAL, {"action": "reply"})
+        return StreamingResponse(iter([_sse("done", done)]), media_type="text/event-stream")
     routed = _demand_count_action(db, request.message)
     if routed is None and _field_request(request.message):
         routed = _field_report_for_request(db, conversation, request)
