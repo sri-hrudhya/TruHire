@@ -17,12 +17,12 @@ from backend.config import settings
 from backend.routers.ingestion import process_batch
 
 
-async def process_batch_job(ctx, batch_id: str, files_data: list, user_id: str) -> None:
+async def process_batch_job(ctx, batch_id: str, files_data: list, user_id: str, duplicate_actions: dict | None = None) -> None:
     """arq task wrapper: same process_batch() the default BackgroundTasks path uses,
     so behavior is identical regardless of which queue backend is active.
     process_batch is blocking (OCR, embeddings), so it runs in a thread to keep the worker's
     event loop free for arq's health check and job timeouts."""
-    await asyncio.to_thread(process_batch, batch_id, files_data, user_id)
+    await asyncio.to_thread(process_batch, batch_id, files_data, user_id, duplicate_actions)
 
 
 class WorkerSettings:

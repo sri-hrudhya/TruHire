@@ -53,6 +53,12 @@ export const ingestionApi = {
   uploadResumes: (formData) => api.post('/ingest/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
+  // Which of these files were already ingested (same bytes)? Nothing is stored.
+  checkDuplicates: (files) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
+    return api.post('/ingest/check-duplicates', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
   getBatch: (id) => api.get(`/ingest/batches/${id}`),
   // history is polled / manually refreshed: always bypass the client cache (the server caches for 10s)
   history: (params = {}) => api.get('/ingest/history', { params, headers: { 'X-Cache-Bypass': '1' } }),

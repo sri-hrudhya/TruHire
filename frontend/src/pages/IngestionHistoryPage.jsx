@@ -5,6 +5,7 @@ import { ingestionApi } from '../lib/api';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { fromState, useBackNavigation, HISTORY_QUERY_KEY } from '../lib/navigation';
 import { POLL_MS } from '../config/env';
+import { formatIst } from '../lib/ingestion';
 import { useMeta } from '../context/MetaContext';
 
 const WINDOWS = [
@@ -217,9 +218,9 @@ export default function IngestionHistoryPage() {
                 const meta = STATUS_META[row.status] || STATUS_META.failed;
                 return (
                   <tr key={`${row.batch_id}-${row.filename}-${i}`} style={{ borderTop: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '0.7rem 1rem', whiteSpace: 'nowrap' }} title={row.uploaded_at ? new Date(row.uploaded_at).toLocaleString() : ''}>
+                    <td style={{ padding: '0.7rem 1rem', whiteSpace: 'nowrap' }} title={row.uploaded_at ? formatIst(row.uploaded_at) : ''}>
                       <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{timeAgo(row.uploaded_at)}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>{row.uploaded_at ? new Date(row.uploaded_at).toLocaleString() : ''}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>{row.uploaded_at ? formatIst(row.uploaded_at) : ''}</div>
                     </td>
                     <td style={{ padding: '0.7rem 1rem', maxWidth: '280px' }}>
                       <div style={{ fontWeight: 600, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.filename}</div>

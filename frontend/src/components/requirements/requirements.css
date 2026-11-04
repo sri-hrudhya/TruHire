@@ -170,14 +170,14 @@
 .history-meta strong { color: var(--text-main); font-family: var(--font-mono); font-weight: 500; }
 .jd-status-label { white-space: nowrap; }
 
-/* Landing: New Requirement tile + five folders fill the viewport as a 3 x 2 grid (2 x 3, then stacked, on narrower screens) */
+/* Landing: New Requirement tile + five folders fill the viewport as a 3 x 2 grid (2 x 3, then stacked, on narrower screens).
+   Every row has the same fixed height, so the client folders (any number of them) are the same size as the practice folders. */
 .landing-grid {
   list-style: none;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: 1fr;
+  grid-auto-rows: calc((clamp(24rem, calc(100vh - var(--topbar-height) - 14rem), 46rem) - var(--space-4)) / 2);
   gap: var(--space-4);
-  min-height: clamp(24rem, calc(100vh - var(--topbar-height) - 14rem), 46rem);
 }
 .landing-grid > li { display: flex; min-width: 0; }
 .landing-grid .new-req-card { flex-direction: column; justify-content: center; align-items: flex-start; gap: var(--space-4); height: 100%; padding: var(--space-5); }
@@ -194,7 +194,7 @@
 .info-card-count-num { font-size: 2rem; font-weight: 800; line-height: 1; margin-right: var(--space-1); }
 .landing-note { grid-column: span 2; align-items: center; }
 @media (max-width: 1000px) { .landing-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 600px) { .landing-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; min-height: 0; } .landing-note { grid-column: auto; } }
+@media (max-width: 600px) { .landing-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; } .landing-note { grid-column: auto; } }
 
 /* Folder search */
 .folder-search {
@@ -236,8 +236,6 @@
 .info-card-copy { position: absolute; bottom: var(--space-3); right: calc(var(--space-3) + 2rem); color: var(--text-subtle); }
 .info-card-wrap:not(:hover) .info-card-copy:not(:focus-visible) { opacity: 0.35; }
 .client-other { margin-top: var(--space-2); }
-.client-folder-card { min-height: 8.5rem; justify-content: space-between; }
-.client-folder-card .info-card-title { display: flex; align-items: center; gap: var(--space-2); overflow-wrap: anywhere; }
 
 /* List view: a spreadsheet-like grid that scrolls inside its frame, header kept in view */
 .req-table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-surface); }

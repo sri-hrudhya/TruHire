@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronRight, FileText, Loader2 } from 'lucide-react';
-import { candidatesApi } from '../../lib/api';
+import { candidatesApi, usersApi } from '../../lib/api';
+import { useAuth } from '../../context/AuthContext';
+import { isAdmin } from '../../lib/review';
 import { fromState } from '../../lib/navigation';
-import { FRESHNESS_LABEL, formatUploaded, freshness } from '../../lib/ingestion';
+import { FRESHNESS_LABEL, formatIst, freshness } from '../../lib/ingestion';
 import NoticePeriodField from './NoticePeriodField';
 import './ingestion.css';
 
 const PAGE = 20;
 
-// Every ingested resume with its upload date, a recent/old marker and an editable notice period.
+// The signed-in user's ingested resumes (admins can switch to anyone's) with upload date, a recent/old marker and an editable notice period.
 // Deliberately no per-resume processing status: bulk-upload progress lives in the panel above.
 export default function IngestedResumes({ refreshKey }) {
   const location = useLocation();
@@ -18,12 +20,22 @@ export default function IngestedResumes({ refreshKey }) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // 'me' = the signed-in user's own resumes; admins can also pick 'all' or any user (the server enforces this).
+  const { user } = useAuth();
+  const admin = isAdmin(user);
+  const [uploader, setUploader] = useState('me');
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    if (!open || !admin || users.length) return;
+    usersApi.list().then((res) => setUsers(res.data)).catch(() => {});
+  }, [open, admin, users.length]);
 
   const load = useCallback(async (offset = 0) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await candidatesApi.list({ limit: PAGE, offset }, true);
+      const res = await candidatesApi.list({ limit: PAGE, offset, uploaded_by: uploader }, true);
       setTotal(res.data.total);
       setRows((prev) => (offset === 0 ? res.data.candidates : [...prev, ...res.data.candidates]));
     } catch (err) {
@@ -31,7 +43,7 @@ export default function IngestedResumes({ refreshKey }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [uploader]);
 
   // Nothing is fetched until the section is opened; after that it follows finished uploads.
   useEffect(() => { if (open) load(0); }, [open, load, refreshKey]);
@@ -50,6 +62,17 @@ export default function IngestedResumes({ refreshKey }) {
         <div id="ingested-body">
           {error && <p className="req-error" role="alert">{error}</p>}
 
+          {admin && (
+            <label className="ingested-filter">
+              <span className="input-label">Uploaded by</span>
+              <select className="input" value={uploader} onChange={(e) => setUploader(e.target.value)}>
+                <option value="me">My resumes</option>
+                <option value="all">All users</option>
+                {users.filter((u) => u.id !== user.id).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </label>
+          )}
+
           <ul className="ingested-list">
             {rows.map((c) => {
               const fresh = freshness(c.uploaded_at);
@@ -60,7 +83,7 @@ export default function IngestedResumes({ refreshKey }) {
                     <span className="slug ingested-file"><FileText size={12} aria-hidden="true" /> {c.original_filename}</span>
                   </div>
                   <div className="ingested-date">
-                    <span className="slug">Uploaded {formatUploaded(c.uploaded_at)}</span>
+                    <span className="slug">Uploaded {formatIst(c.uploaded_at)}{admin && c.uploaded_by_name ? ` by ${c.uploaded_by_name}` : ''}</span>
                     {fresh && <span className={`badge ${fresh === 'recent' ? 'badge-success' : 'badge-neutral'}`}>{FRESHNESS_LABEL[fresh]}</span>}
                   </div>
                   <div className="ingested-notice">

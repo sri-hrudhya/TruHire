@@ -18,10 +18,27 @@ export function freshness(uploadedAt, now = Date.now(), recentDays = RECENT_RESU
 
 export const FRESHNESS_LABEL = Object.freeze({ recent: 'Recently uploaded', old: 'Old' });
 
-export function formatUploaded(uploadedAt) {
+// "12 Oct 2026, 6:01 PM IST": upload times are always Indian Standard Time, whatever the browser's timezone.
+export function formatIst(uploadedAt) {
   if (!uploadedAt) return '—';
   const d = asUtc(uploadedAt);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  if (Number.isNaN(d.getTime())) return '—';
+  const text = d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+  return `${text.replace(/\b(am|pm)\b/, (m) => m.toUpperCase())} IST`;
+}
+
+// "3 days ago": how long ago a resume was ingested ('' when the date is missing or unreadable).
+const AGO_UNITS = [['year', 365 * 86_400_000], ['month', 30 * 86_400_000], ['day', 86_400_000], ['hour', 3_600_000], ['minute', 60_000]];
+export function timeAgo(uploadedAt, now = Date.now()) {
+  if (!uploadedAt) return '';
+  const t = asUtc(uploadedAt).getTime();
+  if (Number.isNaN(t)) return '';
+  const elapsed = now - t;
+  for (const [unit, ms] of AGO_UNITS) {
+    const n = Math.floor(elapsed / ms);
+    if (n >= 1) return `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  }
+  return 'just now';
 }
 
 export function formatNotice(value, unit) {

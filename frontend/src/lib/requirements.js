@@ -146,17 +146,23 @@ export const UNASSIGNED_CLIENT = '__unassigned__';
 export const clientKey = (jd) => (jd?.client_name || '').trim();
 export const inClient = (jd, name) => (name === UNASSIGNED_CLIENT ? !clientKey(jd) : clientKey(jd).toLocaleLowerCase() === (name || '').toLocaleLowerCase());
 
-// Client folders from a list of demands: { name ('' = none), items, cancelled, practices: Map(practiceId -> count) },
-// alphabetical with the unassigned folder last. Client names that differ only by case share one folder.
+// Client folders from a list of demands: { name ('' = none), items, cancelled, practices: Map(practiceId -> demands),
+// positions }, alphabetical with the unassigned folder last.
+// Client names that differ only by case share one folder. `positions` is the headcount opened: the sum of
+// no_of_positions over live (not cancelled) demands, blank counting as 0.
 export function groupByClient(jds) {
   const groups = new Map();
   for (const jd of jds) {
     const key = clientKey(jd).toLocaleLowerCase();
-    if (!groups.has(key)) groups.set(key, { name: clientKey(jd), items: [], cancelled: 0, practices: new Map() });
+    if (!groups.has(key)) groups.set(key, { name: clientKey(jd), items: [], cancelled: 0, positions: 0, practices: new Map() });
     const group = groups.get(key);
     group.items.push(jd);
     if (jd.status === CANCELLED) group.cancelled += 1;
-    else group.practices.set(jd.demand_id, (group.practices.get(jd.demand_id) || 0) + 1);
+    else {
+      const n = Number(jd.no_of_positions) || 0;
+      group.positions += n;
+      group.practices.set(jd.demand_id, (group.practices.get(jd.demand_id) || 0) + 1);
+    }
   }
   return [...groups.values()].sort((a, b) => (!a.name) - (!b.name) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }

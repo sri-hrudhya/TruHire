@@ -10,6 +10,7 @@ import { ingestionApi } from '../lib/api';
 import { fromState, HISTORY_QUERY_KEY } from '../lib/navigation';
 import { POLL_MS, STORAGE_KEYS } from '../config/env';
 import IngestedResumes from '../components/ingestion/IngestedResumes';
+import DuplicateDialog from '../components/ingestion/DuplicateDialog';
 
 // The most recent upload in this tab, so its progress is still shown after visiting
 // Ingestion History (or any other section) and coming back.
@@ -38,6 +39,7 @@ const FILE_STATUS = {
   embedding: { pct: 0.7 },
   indexing: { pct: 0.85 },
   indexed: { pct: 1 },
+  updated: { pct: 1 },
   duplicate: { pct: 1 },
   failed: { pct: 1 },
 };
@@ -59,7 +61,7 @@ function summarize(progress) {
       : (progress?.total_files > 0
           ? Math.min(100, Math.round(((progress.processed_count + progress.duplicate_count + progress.failed_count) / progress.total_files) * 100))
           : 0),
-    processed: live ? count('indexed') : progress?.processed_count ?? 0,
+    processed: live ? count('indexed') + count('updated') : progress?.processed_count ?? 0,
     duplicates: live ? count('duplicate') : progress?.duplicate_count ?? 0,
     failed: live ? count('failed') : progress?.failed_count ?? 0,
   };
@@ -75,6 +77,7 @@ export default function IngestionPage() {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [resumesVersion, setResumesVersion] = useState(0);
+  const [duplicates, setDuplicates] = useState(null);
 
   const fileInputRef = useRef(null);
 
@@ -136,16 +139,39 @@ export default function IngestionPage() {
     }
   };
 
+  // Files already ingested are checked first; if there are any the user picks Skip / Update for each, then the upload runs.
   const handleUpload = async () => {
     if (selectedFiles.length === 0) return;
 
     setIsUploading(true);
     setUploadMessage(null);
+    try {
+      const { data } = await ingestionApi.checkDuplicates(selectedFiles);
+      if (data.duplicates.length > 0) {
+        setDuplicates(data.duplicates);
+        setIsUploading(false);
+        return;
+      }
+    } catch (err) {
+      setUploadMessage({ type: 'error', text: err.response?.data?.detail || 'Could not check the files for duplicates.' });
+      setIsUploading(false);
+      return;
+    }
+    await upload({});
+  };
 
+  const confirmDuplicates = async (actions) => {
+    setDuplicates(null);
+    setIsUploading(true);
+    await upload(actions);
+  };
+
+  const upload = async (duplicateActions) => {
     const formData = new FormData();
     selectedFiles.forEach(file => {
       formData.append('files', file);
     });
+    formData.append('duplicate_actions', JSON.stringify(duplicateActions));
 
     try {
       const res = await ingestionApi.uploadResumes(formData);
@@ -406,6 +432,7 @@ export default function IngestionPage() {
       </div>
 
       <IngestedResumes refreshKey={resumesVersion} />
+      {duplicates && <DuplicateDialog duplicates={duplicates} onConfirm={confirmDuplicates} onClose={() => setDuplicates(null)} />}
     </div>
   );
 }

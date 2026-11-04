@@ -1,9 +1,10 @@
+import json
 import logging
 import time
 from typing import Dict, List, Tuple
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.database import get_db, SessionLocal
@@ -57,7 +58,7 @@ class _Progress:
 
     def file(self, filename: str, status: str, detail: str = "") -> None:
         for f in self.files:
-            if f["filename"] == filename and f["status"] not in ("indexed", "duplicate", "failed"):
+            if f["filename"] == filename and f["status"] not in ("indexed", "updated", "duplicate", "failed"):
                 f["status"], f["detail"] = status, detail
                 break
         self._flush()
@@ -71,7 +72,12 @@ class _Progress:
         self.db.commit()
 
 
-def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
+def _find_duplicate(db: Session, file_hash: str) -> Optional[Candidate]:
+    # file_hash is not unique, so several rows can match; the newest one is "the" duplicate.
+    return db.query(Candidate).filter(Candidate.file_hash == file_hash).order_by(Candidate.uploaded_at.desc()).first()
+
+
+def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicate_actions: Optional[Dict[str, str]] = None) -> None:
     """
     The real ingestion path (used by both the default BackgroundTasks path and the
     optional arq worker - see backend/worker.py). Per-file work (dedupe, text
@@ -91,6 +97,7 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
         duplicates = failed = 0
         errors: List[Dict[str, str]] = []
         prepared: List[Tuple[Candidate, str, str]] = []
+        updated_ids: set = set()
         progress = _Progress(db, batch, [name for name, _ in files_data])
         progress.stage("reading")
 
@@ -98,8 +105,11 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
             try:
                 progress.file(filename, "extracting", "Reading and extracting text")
                 file_hash = compute_file_hash(file_bytes)
-                existing = db.query(Candidate).filter(Candidate.file_hash == file_hash).first()
-                if existing:
+                existing = _find_duplicate(db, file_hash)
+                # "update" re-ingests over the existing record; a second copy of a file already being
+                # updated in this same batch is just a duplicate.
+                updating = bool(existing) and (duplicate_actions or {}).get(filename) == "update" and existing.id not in updated_ids
+                if existing and not updating:
                     duplicates += 1
                     progress.file(filename, "duplicate", f"Already uploaded as {existing.display_id or existing.candidate_name}")
                     errors.append({"filename": filename, "error": f"Skipped exact duplicate of candidate '{existing.candidate_name}' (ID: {existing.id})"})
@@ -126,8 +136,14 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
                         parsed = parse_resume(raw_text, filename)
                         pii_found = detect_pii(raw_text)
                         pii_detected = {category: len(matches) for category, matches in pii_found.items()}
-                        display_id = get_next_candidate_display_id(db)
-                        candidate = Candidate(display_id=display_id, position_id=None, resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, status="New", uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, file_hash=file_hash, original_filename=filename)
+                        fields = dict(resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, original_filename=filename)
+                        if updating:
+                            candidate = existing
+                            for key, value in fields.items():
+                                setattr(candidate, key, value)
+                            updated_ids.add(candidate.id)
+                        else:
+                            candidate = Candidate(display_id=get_next_candidate_display_id(db), position_id=None, status="New", file_hash=file_hash, **fields)
                         set_candidate_filter_metadata(candidate, parsed.get("location"), parsed.get("job_titles"))
                         db.add(candidate); db.flush()
                         safe = redact_pii(raw_text, candidate_name=candidate.candidate_name)
@@ -173,7 +189,8 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
                     candidate.opensearch_doc_id = candidate.id
                 processed = len(prepared)
                 for cand, _, _ in prepared:
-                    progress.file(cand.original_filename, "indexed", f"{cand.display_id} {cand.candidate_name}")
+                    was_update = cand.id in updated_ids
+                    progress.file(cand.original_filename, "updated" if was_update else "indexed", f"{'Updated ' if was_update else ''}{cand.display_id} {cand.candidate_name}")
             except Exception as exc:
                 failed += len(prepared)
                 for cand, _, _ in prepared:
@@ -196,8 +213,9 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str) -> None:
 
 @router.post("/upload")
 @limiter.limit(settings.RATE_LIMIT_UPLOAD)
-async def upload_resumes(request: Request, background_tasks: BackgroundTasks, files: List[UploadFile] = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def upload_resumes(request: Request, background_tasks: BackgroundTasks, files: List[UploadFile] = File(...), duplicate_actions: str = Form(""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not files: raise HTTPException(status_code=400, detail="No files provided.")
+    actions = _parse_duplicate_actions(duplicate_actions)
     if len(files) > settings.INGEST_BATCH_SIZE: raise HTTPException(status_code=400, detail=f"Batch size exceeds {settings.INGEST_BATCH_SIZE}.")
     max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024; files_data = []
     for file in files:
@@ -213,7 +231,7 @@ async def upload_resumes(request: Request, background_tasks: BackgroundTasks, fi
         try:
             from arq import create_pool
             pool = await create_pool(settings.get_arq_redis_settings())
-            await pool.enqueue_job("process_batch_job", batch.id, files_data, current_user.id)
+            await pool.enqueue_job("process_batch_job", batch.id, files_data, current_user.id, actions)
             if hasattr(pool, "aclose"):
                 await pool.aclose()
             else:
@@ -224,9 +242,35 @@ async def upload_resumes(request: Request, background_tasks: BackgroundTasks, fi
 
     if not enqueued:
         # Default local-dev mode (or fallback): zero extra infra required
-        background_tasks.add_task(process_batch, batch.id, files_data, current_user.id)
+        background_tasks.add_task(process_batch, batch.id, files_data, current_user.id, actions)
 
     return {"batch_id": batch.id, "status": "processing", "total_files": len(files_data), "message": "Resume batch upload accepted and queued."}
+
+
+def _parse_duplicate_actions(raw: str) -> Dict[str, str]:
+    """JSON {"filename": "update"|"skip"}; anything missing or invalid means skip (the old behavior)."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return {k: v for k, v in data.items() if v == "update"} if isinstance(data, dict) else {}
+
+
+@router.post("/check-duplicates")
+async def check_duplicates(files: List[UploadFile] = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Which of these files were already ingested (same bytes)? Hashes only; nothing is stored."""
+    if len(files) > settings.INGEST_BATCH_SIZE: raise HTTPException(status_code=400, detail=f"Batch size exceeds {settings.INGEST_BATCH_SIZE}.")
+    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+    duplicates = []
+    for file in files:
+        contents = await file.read()
+        if len(contents) > max_bytes: raise HTTPException(status_code=400, detail=f"File '{file.filename}' exceeds {settings.MAX_UPLOAD_MB} MB.")
+        existing = _find_duplicate(db, compute_file_hash(contents))
+        if existing:
+            uploader = db.query(User.name).filter(User.id == existing.uploaded_by).scalar()
+            duplicates.append({"filename": file.filename or "resume", "candidate_id": existing.id, "display_id": existing.display_id,
+                               "candidate_name": existing.candidate_name, "uploaded_at": _iso_utc(existing.uploaded_at), "uploaded_by": uploader})
+    return {"duplicates": duplicates}
 
 
 @router.get("/batches")

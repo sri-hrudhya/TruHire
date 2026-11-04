@@ -184,7 +184,7 @@ export default function JobDescriptionsPage() {
         ) : byClient && !r.clientName ? (
           <>
             <div className="section-head"><h2>Clients <span className="slug">{plural(r.jds.filter((item) => item.status !== 'Cancelled').length)}</span></h2><button type="button" className="btn btn-primary" onClick={create}>New demand</button></div>
-            <ClientCards jds={r.jds} loading={r.loading} practiceName={practiceName} label="Clients" emptyText="No demands yet." onOpen={(name) => r.setClient(name || UNASSIGNED_CLIENT)} />
+            <ClientCards jds={r.jds} loading={r.loading} onCreate={create} label="Clients" emptyText="No demands yet." onOpen={(name) => r.setClient(name || UNASSIGNED_CLIENT)} />
           </>
         ) : demand && !r.clientName && r.visibleJds.length > 0 ? (
           <>

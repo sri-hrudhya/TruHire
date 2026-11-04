@@ -1,10 +1,12 @@
 import { Building2 } from 'lucide-react';
 import { groupByClient } from '../../lib/requirements';
+import { NewRequirementTile } from './DemandCards';
 import './requirements.css';
 
-// Client folders. Inside a practice they list that practice's clients; on the client-wise landing they list every
-// client, and `practiceName` (when given) adds a "Java 2 · Pega 1" breakdown of where its demands are filed.
-export default function ClientCards({ jds, loading, onOpen, practiceName, emptyText = 'No demands in this practice yet.', label = 'Clients in this practice' }) {
+// Client folders, laid out and sized exactly like the practice folders (DemandCards). Inside a practice they list that
+// practice's clients; on the client-wise landing they list every client. The big number is the positions opened
+// (cancelled demands excluded).
+export default function ClientCards({ jds, loading, onOpen, onCreate, emptyText = 'No demands in this practice yet.', label = 'Clients in this practice' }) {
   const clients = groupByClient(jds);
 
   if (!clients.length) {
@@ -12,21 +14,19 @@ export default function ClientCards({ jds, loading, onOpen, practiceName, emptyT
   }
 
   return (
-    <ul className="card-grid card-grid-wide" aria-label={label}>
-      {clients.map(({ name, items, cancelled, practices }) => {
+    <ul className="landing-grid" aria-label={label}>
+      {onCreate && <NewRequirementTile onCreate={onCreate} />}
+      {clients.map(({ name, items, cancelled, positions }) => {
         const live = items.length - cancelled;
-        const breakdown = practiceName
-          ? [...practices.entries()].map(([id, n]) => `${practiceName(id) || 'No practice'} ${n}`).join(' · ')
-          : '';
         return (
           <li key={name || '__unassigned'}>
-            <button type="button" className="card card-hover info-card client-folder-card" onClick={() => onOpen(name)}>
-              <span className="info-card-title"><Building2 size={18} aria-hidden="true" />{name || 'No client assigned'}</span>
-              {breakdown && <span className="slug">{breakdown}</span>}
-              <span className="info-card-count">
-                <span className="info-card-count-num">{live}</span> {live === 1 ? 'demand' : 'demands'}
-                {cancelled > 0 && <span className="slug"> · {cancelled} cancelled</span>}
-              </span>
+            <button type="button" className="card card-hover info-card folder-card" onClick={() => onOpen(name)}
+              aria-label={`${name || 'No client assigned'}, ${positions} position${positions === 1 ? '' : 's'}`}>
+              <span className="info-card-title folder-card-title"><Building2 size={20} aria-hidden="true" /> {name || 'No client assigned'}</span>
+              <dl className="info-card-facts">
+                <div><dt>Demands</dt><dd>{live}{cancelled > 0 ? ` (+${cancelled} cancelled)` : ''}</dd></div>
+              </dl>
+              <span className="info-card-count"><span className="info-card-count-num">{positions}</span> {positions === 1 ? 'position' : 'positions'}</span>
             </button>
           </li>
         );

@@ -64,25 +64,36 @@ def _serialize_candidate(c: Candidate) -> Dict[str, Any]:
 
 
 @router.get("", response_model=dict)
-def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, uploaded_by: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """uploaded_by omitted: every resume (search/review callers). Given: "me" or a user id narrows to that
+    uploader and "all" lifts the filter, but only admins may look at anyone but themselves."""
     bounded = max(1, min(limit, 100))
     needle = (q or "").strip()[:100]
-    cache_key = f"candidates:list:{bounded}:{offset}:{needle.lower()}"
+    uploader_id = None
+    if uploaded_by:
+        if user.role != "admin" or uploaded_by == "me":
+            uploader_id = user.id
+        elif uploaded_by != "all":
+            uploader_id = uploaded_by
+    cache_key = f"candidates:list:{bounded}:{offset}:{needle.lower()}:{uploader_id or '*'}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
 
     query = db.query(Candidate).order_by(Candidate.uploaded_at.desc())
+    if uploader_id:
+        query = query.filter(Candidate.uploaded_by == uploader_id)
     if needle:  # resume ID (e.g. TRU-CN-0007) or candidate name; partial and case-insensitive
         like = "%" + needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         query = query.filter(or_(Candidate.display_id.ilike(like, escape="\\"), Candidate.candidate_name.ilike(like, escape="\\")))
     total = query.count()
     rows = query.offset(offset).limit(bounded).all()
+    names = dict(db.query(User.id, User.name).filter(User.id.in_({c.uploaded_by for c in rows})).all()) if rows else {}
     data = {
         "total": total,
         "limit": bounded,
         "offset": offset,
-        "candidates": [_serialize_candidate(c) for c in rows]
+        "candidates": [{**_serialize_candidate(c), "uploaded_by_name": names.get(c.uploaded_by)} for c in rows]
     }
     set_cache(cache_key, data, ttl_seconds=settings.CACHE_TTL_QUERY)
     return data
