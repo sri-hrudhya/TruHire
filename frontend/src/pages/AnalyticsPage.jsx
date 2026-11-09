@@ -142,10 +142,10 @@ export default function AnalyticsPage() {
         {/* Status Funnel */}
         <div className="card">
           <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.25rem' }}>
-            Recruitment Conversion Funnel
+            Candidate Status Breakdown
           </h3>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-            Candidate progression from initial ingest through interview stages.
+            Pipeline progress and candidate availability across the talent pool.
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -153,7 +153,9 @@ export default function AnalyticsPage() {
               { label: 'New Ingests', key: 'New', color: 'var(--primary)', bg: 'var(--primary-light)' },
               { label: 'Shortlisted', key: 'Shortlisted', color: 'var(--info)', bg: 'var(--info-bg)' },
               { label: 'Interviewed', key: 'Interviewed', color: 'var(--warning)', bg: 'var(--warning-bg)' },
-              { label: 'Rejected', key: 'Rejected', color: 'var(--danger)', bg: 'var(--danger-bg)' }
+              { label: 'Rejected', key: 'Rejected', color: 'var(--danger)', bg: 'var(--danger-bg)' },
+              { label: 'Active', key: 'Active', color: 'var(--success)', bg: 'var(--success-bg)' },
+              { label: 'Not Active', key: 'Not Active', color: 'var(--text-subtle)', bg: 'var(--bg-subtle)' },
             ].map(stage => {
               const count = statusFunnel[stage.key] || 0;
               const pct = Math.round((count / totalInFunnel) * 100);

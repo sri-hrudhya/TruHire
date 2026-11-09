@@ -12,16 +12,20 @@ import { candidatesApi } from '../lib/api';
 import ResumePreviewModal from '../components/ResumePreviewModal';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { useBackNavigation } from '../lib/navigation';
-import { useMeta } from '../context/MetaContext';
 import CommentThread from '../components/review/CommentThread';
+import './candidate-detail.css';
 
 export default function CandidateDetailPage() {
   const { id } = useParams();
-  const { candidate_statuses: candidateStatuses } = useMeta();
   // Back returns to wherever the profile was opened from (Search, Requirements, Ingestion History).
   const { goBack, backLabel } = useBackNavigation('/search', 'Search');
   const [candidate, setCandidate] = useState(null);
   const [matches, setMatches] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [requirementHistory, setRequirementHistory] = useState([]);
+  const [historyCursor, setHistoryCursor] = useState(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isResumeOpen, setIsResumeOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
@@ -30,12 +34,17 @@ export default function CandidateDetailPage() {
     const loadCandidateData = async () => {
       setLoading(true);
       try {
-        const [candRes, matchesRes] = await Promise.all([
+        const [candRes, matchesRes, historyRes] = await Promise.all([
           candidatesApi.get(id),
-          candidatesApi.getMatches(id)
+          candidatesApi.getMatches(id),
+          candidatesApi.getHistory(id).catch(() => ({ data: { items: [] } }))
         ]);
         setCandidate(candRes.data);
         setMatches(matchesRes.data.matches || []);
+        setHistory(historyRes.data.items || []);
+        setRequirementHistory(historyRes.data.requirements || []);
+        setHistoryCursor(historyRes.data.next_cursor || null);
+        setHistoryHasMore(!!historyRes.data.has_more);
       } catch (err) {
         console.error('Error loading candidate detail:', err);
       } finally {
@@ -45,14 +54,53 @@ export default function CandidateDetailPage() {
     loadCandidateData();
   }, [id]);
 
-  const handleStatusUpdate = async (newStatus) => {
+  const refreshHistory = async () => {
+    const historyRes = await candidatesApi.getHistory(id);
+    setHistory(historyRes.data.items || []);
+    setRequirementHistory(historyRes.data.requirements || []);
+    setHistoryCursor(historyRes.data.next_cursor || null);
+    setHistoryHasMore(!!historyRes.data.has_more);
+  };
+
+  const handleAvailabilityUpdate = async (newStatus) => {
     try {
-      await candidatesApi.updateStatus(id, newStatus);
-      setCandidate(prev => ({ ...prev, status: newStatus }));
-      setStatusMessage(`Recruitment status updated to ${newStatus}`);
+      const response = await candidatesApi.updateAvailability(id, newStatus);
+      setCandidate((previous) => ({ ...previous, ...response.data }));
+      await refreshHistory();
+      setStatusMessage(`Availability updated to ${newStatus}`);
       setTimeout(() => setStatusMessage(null), 3000);
     } catch (err) {
-      console.error('Failed to update status:', err);
+      console.error('Failed to update availability:', err);
+      setStatusMessage('Could not update availability. Please try again.');
+    }
+  };
+
+  const handleRequirementStatusUpdate = async (positionId, newStatus) => {
+    try {
+      await candidatesApi.updateRequirementStatus(positionId, id, newStatus);
+      setMatches((previous) => previous.map((match) => match.position_id === positionId
+        ? { ...match, requirement_status: newStatus } : match));
+      await refreshHistory();
+      setStatusMessage(`Requirement status updated to ${newStatus}`);
+      setTimeout(() => setStatusMessage(null), 3000);
+    } catch (err) {
+      console.error('Failed to update requirement status:', err);
+      setStatusMessage('Could not update requirement status. Please try again.');
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    if (!historyCursor || historyLoadingMore) return;
+    setHistoryLoadingMore(true);
+    try {
+      const response = await candidatesApi.getHistory(id, { cursor: historyCursor, limit: 50 });
+      setHistory((previous) => [...previous, ...(response.data.items || [])]);
+      setHistoryCursor(response.data.next_cursor || null);
+      setHistoryHasMore(!!response.data.has_more);
+    } catch {
+      setStatusMessage('Could not load more candidate history. Try again.');
+    } finally {
+      setHistoryLoadingMore(false);
     }
   };
 
@@ -146,6 +194,9 @@ export default function CandidateDetailPage() {
                     <Phone size={14} /> {candidate.phone}
                   </span>
                 )}
+                {candidate.current_company && <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Briefcase size={14} /> {candidate.current_company}
+                </span>}
                 <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                   <Briefcase size={14} /> {candidate.years_experience} Years Experience
                 </span>
@@ -153,7 +204,7 @@ export default function CandidateDetailPage() {
             </div>
           </div>
 
-          {/* Actions: View Resume + Status Dropdown + AI Chat */}
+          {/* Availability is global; hiring stage is set per requirement below. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <button
               onClick={() => setIsResumeOpen(true)}
@@ -164,8 +215,9 @@ export default function CandidateDetailPage() {
             </button>
 
             <select
-              value={candidate.status}
-              onChange={(e) => handleStatusUpdate(e.target.value)}
+              value={candidate.availability_status || 'Active'}
+              onChange={(e) => handleAvailabilityUpdate(e.target.value)}
+              aria-label="Candidate availability"
               className="input-field"
               style={{
                 width: 'auto',
@@ -175,7 +227,8 @@ export default function CandidateDetailPage() {
                 backgroundColor: 'var(--bg-subtle)'
               }}
             >
-              {candidateStatuses.map((st) => <option key={st} value={st}>{st}</option>)}
+              <option value="Active">Active</option>
+              <option value="Not Active">Not Active</option>
             </select>
           </div>
         </div>
@@ -254,6 +307,7 @@ export default function CandidateDetailPage() {
                       <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                         {m.position_title}
                       </span>
+                      {m.client_name && <span className="badge badge-neutral">{m.client_name}</span>}
                       <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
                         {m.is_version_current ? 'Current requirement' : 'Earlier requirement version'}
                       </span>
@@ -263,6 +317,15 @@ export default function CandidateDetailPage() {
                       {m.match_score.toFixed(1)}% Match
                     </span>
                   </div>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.8125rem', fontWeight: 600 }}>
+                    Hiring stage for this requirement
+                    <select className="input-field" value={m.requirement_status || 'New'}
+                      onChange={(event) => handleRequirementStatusUpdate(m.position_id, event.target.value)}
+                      aria-label={`Hiring stage for ${m.position_display_id || m.position_title}`} style={{ width: 'auto' }}>
+                      {['New', 'Shortlisted', 'Interviewed', 'Rejected'].map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+                    </select>
+                  </label>
 
                   {/* Summary & Citation */}
                   {m.llm_summary && (
@@ -300,6 +363,32 @@ export default function CandidateDetailPage() {
         <div style={{ paddingTop: 'var(--space-4)' }}>
           <CommentThread candidateId={candidate.id} />
         </div>
+      </section>
+
+      <section className="card" style={{ marginTop: '2rem', padding: '1.5rem' }}>
+        <div className="section-head"><h2>Candidate History</h2></div>
+        <p className="dek">Availability: <strong>{candidate.availability_status || 'Active'}</strong>
+          {candidate.availability_updated_at && <> · Last modified {new Date(candidate.availability_updated_at).toLocaleString()}{candidate.availability_updated_by ? ` by ${history.find((event) => event.event_type === 'availability_status_changed')?.actor || 'a recruiter'}` : ''}</>}
+        </p>
+        <h3>Requirements and client status</h3>
+        {requirementHistory.length ? <ul className="candidate-requirement-history">
+          {requirementHistory.map((item) => <li key={item.id}>
+            <strong>{item.client_name || 'No client'} — {item.status}</strong>
+            <span>{[item.display_id, item.title].filter(Boolean).join(' · ')}{item.demand_owner ? ` · Demand owner: ${item.demand_owner}` : ''}</span>
+            {item.last_modified && <small>Last modified {new Date(item.last_modified).toLocaleString()}{item.modified_by ? ` | Modified by ${item.modified_by}` : ''}</small>}
+          </li>)}
+        </ul> : <p className="dek">No requirement status has been recorded yet.</p>}
+        <h3>Activity notes</h3>
+        {history.length ? <ol className="candidate-history" aria-label="Candidate history with TruHire">
+          {history.map((event) => <li key={event.id}>
+            <strong>{event.summary}</strong>
+            {(event.position_title || event.client_name) && <span>{[event.position_title, event.client_name].filter(Boolean).join(' · ')}</span>}
+            <small>Last modified {new Date(event.timestamp).toLocaleString()}{event.actor ? ` | Modified by ${event.actor}` : ''}</small>
+          </li>)}
+        </ol> : <p className="dek">No recorded activity yet. New status and review activity will appear here.</p>}
+        {historyHasMore && <button type="button" className="btn btn-secondary btn-compact" onClick={loadMoreHistory} disabled={historyLoadingMore}>
+          {historyLoadingMore ? 'Loading…' : 'Load more history'}
+        </button>}
       </section>
 
       {/* Resume Preview Modal */}

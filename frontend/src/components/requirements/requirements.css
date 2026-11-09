@@ -158,6 +158,12 @@
 .info-card-rows dd { color: var(--text-main); font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 .info-card-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
 .info-card-row > div, .info-card-rows > div { min-width: 0; }
+.info-card-fact-wide { grid-column: 1 / -1; }
+.jd-card-status-text { overflow-wrap: anywhere; }
+.jd-card-status-input { flex: 1; min-width: 0; width: auto; padding: var(--space-1) var(--space-2); }
+/* While a card's status is being edited the hover-revealed copy/delete actions step aside. */
+.info-card-wrap.is-editing .info-card-copy,
+.info-card-wrap.is-editing .info-card-remove { opacity: 0; pointer-events: none; }
 
 /* JD detail: toolbar, then grouped fields in a responsive row of groups */
 .detail-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border-color); }

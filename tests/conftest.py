@@ -32,6 +32,15 @@ _use_isolated_test_database()
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_state():
+    """Keep IP-keyed limiter counters from leaking between unrelated tests."""
+    from backend.rate_limit import limiter
+
+    limiter.reset()
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _baseline_data():
     """The isolated test database starts empty; a few tests browse 'existing' records, so

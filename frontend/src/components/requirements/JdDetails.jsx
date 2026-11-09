@@ -69,6 +69,8 @@ export default function JdDetails({ jd, demandName, onStatus, onEdit, onDuplicat
           ['Demand ID', `${jd.display_id || '—'}`],
           ['Practice', demandName || '—'],
           ['Client', jd.client_name || '—'],
+          ['Demand Owner', jd.demand_owner || '—'],
+          ['Current Status', jd.current_status || '—'],
           showRole(jd) && ['Role', jd.role],
           ['Locations', formatLocations(jd)],
           ['Experience', formatExperience(jd.experience_years, jd.experience_max_years)],

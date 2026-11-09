@@ -1,0 +1,27 @@
+.candidate-history,
+.candidate-requirement-history {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.candidate-history li,
+.candidate-requirement-history li {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--primary-border);
+  background: var(--bg-subtle);
+}
+
+.candidate-history li > span,
+.candidate-history li > small,
+.candidate-requirement-history li > span,
+.candidate-requirement-history li > small {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.candidate-requirement-history li strong { color: var(--text-main); }

@@ -29,11 +29,20 @@ export default function ResultsPanel({ s, onPreview }) {
         </div>
       )}
       {view === 'results' && (
-        <ul className="match-list">
-          {results.results.map((item) => (
-            <ResultRow key={item.candidate.id} item={item} onStatus={s.setCandidateStatus} onPreview={onPreview} />
-          ))}
-        </ul>
+        results.client_groups?.length ? results.client_groups.map((group) => (
+          <section className="client-result-group" key={group.position.id} aria-label={`Matches for ${group.position.title}`}>
+            <h2>{group.position.title} <span className="slug">{group.position.client_name} · {group.total_matches} matches</span></h2>
+            {group.results.length
+              ? <ul className="match-list">{group.results.map((item) => <ResultRow key={`${group.position.id}:${item.candidate.id}`} item={item} onStatus={s.setCandidateStatus} onPreview={onPreview} />)}</ul>
+              : <p className="dek">No candidates matched this requirement.</p>}
+          </section>
+        )) : (
+          <ul className="match-list">
+            {results.results.map((item) => (
+              <ResultRow key={item.candidate.id} item={item} onStatus={s.setCandidateStatus} onPreview={onPreview} />
+            ))}
+          </ul>
+        )
       )}
       {view === 'empty' && (
         <div className="stack stack-tight">

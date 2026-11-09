@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { FileCheck, Loader2, Save, Sparkles, UploadCloud } from 'lucide-react';
 import { jdApi } from '../../lib/api';
-import { changedDetails, detailsPayload, jdLocations, MAX_LOCATIONS, OTHER_CLIENT, validateDetails } from '../../lib/requirements';
+import { changedDetails, DEMAND_OWNERS, detailsPayload, jdLocations, MAX_LOCATIONS, OTHER_CLIENT, validateDetails } from '../../lib/requirements';
 import { useMeta } from '../../context/MetaContext';
 import TagInput from '../ui/TagInput';
 import StatusSelect from './StatusSelect';
@@ -17,6 +17,9 @@ const initialDetails = (jd, creating, defaultStatus, template, defaultDemandId) 
     demandId: src?.demand_id || (creating && defaultDemandId) || '',
     locations: jdLocations(src),
     clientName: src?.client_name || '',
+    demandOwner: src?.demand_owner || '',
+    // A copy is a new demand: the source's "where it stands" note does not carry over.
+    currentStatus: creating ? '' : src?.current_status || '',
     experience: src?.experience_years == null ? '' : String(src.experience_years),
     experienceMax: src?.experience_max_years == null ? '' : String(src.experience_max_years),
     noOfPositions: creating && !template ? '1' : src?.no_of_positions == null ? '' : String(src.no_of_positions),
@@ -210,6 +213,18 @@ export default function RequirementEditor({ jd, creating, template = null, defau
               setPickedResumes(picked);
               return null;
             }} />
+        </div>
+        <div>
+          <label className="input-label" htmlFor="req-owner">Demand Owner</label>
+          <select id="req-owner" className="input-field" value={details.demandOwner} onChange={setField('demandOwner')}>
+            <option value="">Select an owner</option>
+            {DEMAND_OWNERS.map((name) => <option key={name} value={name}>{name}</option>)}
+            {details.demandOwner && !DEMAND_OWNERS.includes(details.demandOwner) && <option value={details.demandOwner}>{details.demandOwner}</option>}
+          </select>
+        </div>
+        <div>
+          <label className="input-label" htmlFor="req-current-status">Current Status</label>
+          <input id="req-current-status" className="input-field" maxLength={500} value={details.currentStatus} onChange={setField('currentStatus')} placeholder="e.g. Interview scheduled with client" />
         </div>
         <div>
           <label className="input-label" htmlFor="req-start">Start Date</label>

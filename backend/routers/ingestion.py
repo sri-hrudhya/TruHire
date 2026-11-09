@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.database import get_db, SessionLocal
-from backend.models import User, Candidate, IngestionBatch, get_next_candidate_display_id
+from backend.models import User, Candidate, CandidateActivity, IngestionBatch, get_next_candidate_display_id
 from backend.auth import get_current_user
 from backend.rate_limit import limiter
 from backend.services.common import ai_audit
@@ -33,7 +33,7 @@ _profile_header = candidate_header
 
 def _payload(candidate: Candidate) -> Dict:
     # location_keys / role_tokens are the filterable fields shared by Qdrant and OpenSearch.
-    return {"candidate_id": candidate.id, "candidate_name": candidate.candidate_name, "skills": candidate.extracted_skills or [], "years_experience": candidate.years_experience, "filename": candidate.original_filename,
+    return {"candidate_id": candidate.id, "candidate_name": candidate.candidate_name, "current_company": candidate.current_company or "", "skills": candidate.extracted_skills or [], "years_experience": candidate.years_experience, "filename": candidate.original_filename,
             **index_payload_fields(candidate.location, candidate.job_titles)}
 
 
@@ -71,10 +71,23 @@ class _Progress:
         self.batch.file_status = [dict(f) for f in self.files]  # reassign so SQLAlchemy sees the JSON change
         self.db.commit()
 
+    def skip_remaining(self, detail: str) -> None:
+        """Mark every file that has not reached a final state as skipped (used on cancel)."""
+        final = ("indexed", "updated", "duplicate", "failed", "skipped")
+        for f in self.files:
+            if f["status"] not in final:
+                f["status"], f["detail"] = "skipped", detail
+        self._flush()
+
 
 def _find_duplicate(db: Session, file_hash: str) -> Optional[Candidate]:
     # file_hash is not unique, so several rows can match; the newest one is "the" duplicate.
     return db.query(Candidate).filter(Candidate.file_hash == file_hash).order_by(Candidate.uploaded_at.desc()).first()
+
+
+def _cancel_requested(db: Session, batch_id: str) -> bool:
+    """Fresh read each call: the cancel endpoint commits from another session."""
+    return bool(db.query(IngestionBatch.cancel_requested).filter(IngestionBatch.id == batch_id).scalar())
 
 
 def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicate_actions: Optional[Dict[str, str]] = None) -> None:
@@ -100,8 +113,12 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicat
         updated_ids: set = set()
         progress = _Progress(db, batch, [name for name, _ in files_data])
         progress.stage("reading")
+        cancelled = False
 
         for filename, file_bytes in files_data:
+            if _cancel_requested(db, batch_id):
+                cancelled = True
+                break
             try:
                 progress.file(filename, "extracting", "Reading and extracting text")
                 file_hash = compute_file_hash(file_bytes)
@@ -136,7 +153,11 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicat
                         parsed = parse_resume(raw_text, filename)
                         pii_found = detect_pii(raw_text)
                         pii_detected = {category: len(matches) for category, matches in pii_found.items()}
-                        fields = dict(resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"], phone=parsed["phone"], extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, original_filename=filename)
+                        fields = dict(resume_file_url=file_url, candidate_name=parsed["candidate_name"], email=parsed["email"],
+                                      email_norm=(parsed["email"] or "").strip().casefold() or None,
+                                      phone=parsed["phone"], phone_norm="".join(ch for ch in (parsed["phone"] or "") if ch.isdigit()) or None,
+                                      current_company=parsed.get("current_company") or None,
+                                      extracted_skills=parsed["extracted_skills"], years_experience=parsed["years_experience"], education=parsed["education"], resume_text=raw_text, pii_detected=pii_detected, uploaded_by=user_id, uploaded_at=datetime.utcnow(), ingestion_batch_id=batch_id, original_filename=filename)
                         if updating:
                             candidate = existing
                             for key, value in fields.items():
@@ -146,6 +167,11 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicat
                             candidate = Candidate(display_id=get_next_candidate_display_id(db), position_id=None, status="New", file_hash=file_hash, **fields)
                         set_candidate_filter_metadata(candidate, parsed.get("location"), parsed.get("job_titles"))
                         db.add(candidate); db.flush()
+                        activity_actor = db.get(User, user_id)
+                        db.add(CandidateActivity(candidate_id=candidate.id,
+                            event_type="resume_updated" if updating else "resume_ingested",
+                            actor_id=user_id, actor_name=activity_actor.name if activity_actor else None,
+                            occurred_at=datetime.utcnow(), summary="Resume record updated." if updating else "Resume added to TruHire."))
                         safe = redact_pii(raw_text, candidate_name=candidate.candidate_name)
                         prepared.append((candidate, _profile_header(candidate), safe))
                         progress.file(filename, "parsed", f"{candidate.candidate_name} - waiting to be indexed")
@@ -160,8 +186,16 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicat
             # branch it took, must update visible batch progress.
             batch.processed_count = 0; batch.failed_count = failed; batch.duplicate_count = duplicates; batch.error_log = errors; db.commit()
 
+        # A stop requested during parsing (or while the last files were being read) skips indexing:
+        # parsed resumes stay in the DB unindexed, recoverable via POST /api/ingest/reindex?missing_only=true.
+        if not cancelled:
+            cancelled = _cancel_requested(db, batch_id)
         processed = 0
-        if prepared:
+        if cancelled:
+            progress.skip_remaining("Stopped by user")
+            errors.append({"filename": "batch", "error": "Ingestion stopped by user before finishing."})
+            batch.error_log = errors
+        if prepared and not cancelled:
             try:
                 progress.stage("embedding")
                 chunk_lists = [profile_chunks(header, safe) for _, header, safe in prepared]
@@ -198,9 +232,9 @@ def process_batch(batch_id: str, files_data: List[tuple], user_id: str, duplicat
                 errors.append({"filename": "batch embedding/indexing", "error": str(exc)})
             batch.processed_count = processed; batch.failed_count = failed; batch.duplicate_count = duplicates; batch.error_log = errors; db.commit()
 
-        batch.status = "completed" if processed or duplicates else "failed"
+        batch.status = "cancelled" if cancelled else ("completed" if processed or duplicates else "failed")
         batch.stage = "done"
-        logger.info("ingest batch=%s status=%s total=%s indexed=%s duplicates=%s failed=%s", batch_id, batch.status, len(files_data), processed, duplicates, failed)
+        logger.info("ingest batch=%s status=%s total=%s indexed=%s duplicates=%s failed=%s cancelled=%s", batch_id, batch.status, len(files_data), processed, duplicates, failed, cancelled)
         db.commit()
         clear_cache("candidates:list:")
         clear_cache("requirements:matches:")
@@ -283,6 +317,18 @@ def list_batches(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)
 def get_batch_status(batch_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     batch = db.query(IngestionBatch).filter(IngestionBatch.id == batch_id).first()
     if not batch: raise HTTPException(status_code=404, detail="Ingestion batch not found.")
+    return batch
+
+
+@router.post("/batches/{batch_id}/cancel")
+def cancel_batch(batch_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Ask a running batch to stop. Cooperative: the worker notices between files and before
+    the indexing stage, so a file already being parsed still finishes."""
+    batch = db.query(IngestionBatch).filter(IngestionBatch.id == batch_id).first()
+    if not batch: raise HTTPException(status_code=404, detail="Ingestion batch not found.")
+    if batch.status != "processing": raise HTTPException(status_code=409, detail="Only a running upload can be stopped.")
+    batch.cancel_requested = True
+    db.commit()
     return batch
 
 
@@ -394,6 +440,9 @@ def reparse_candidate(session: Session, candidate: Candidate) -> Dict:
     candidate.education = parsed["education"]
     candidate.email = parsed["email"] or candidate.email
     candidate.phone = parsed["phone"] or candidate.phone
+    candidate.email_norm = (candidate.email or "").strip().casefold() or None
+    candidate.phone_norm = "".join(ch for ch in (candidate.phone or "") if ch.isdigit()) or None
+    candidate.current_company = parsed.get("current_company") or None
     # Unlike contact fields, an absent location/title replaces the old value: it reflects the resume as parsed now.
     set_candidate_filter_metadata(candidate, parsed.get("location"), parsed.get("job_titles"))
     session.flush()

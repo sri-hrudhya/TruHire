@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database import get_db
-from backend.models import Candidate, Position, CandidateMatch, IngestionBatch, User
+from backend.models import CANDIDATE_STATUSES, Candidate, Position, CandidateMatch, IngestionBatch, User
 from backend.auth import get_current_user
 from backend.services.common.cache import get_cache, set_cache, get_data_epoch
 
@@ -110,13 +110,9 @@ def _compute_overview(position_id: Optional[str], db: Session) -> Dict[str, Any]
     total_failed_files = sum(b.failed_count or 0 for b in batches)
     total_duplicate_files = sum(b.duplicate_count or 0 for b in batches)
 
-    # 6. Status Funnel (New -> Shortlisted -> Interviewed -> Rejected)
-    status_funnel = {
-        "New": 0,
-        "Shortlisted": 0,
-        "Interviewed": 0,
-        "Rejected": 0
-    }
+    # Recruitment stages and availability states share the editable status field.
+    # Report every supported value so Active / Not Active are never miscounted as New.
+    status_funnel = {status: 0 for status in CANDIDATE_STATUSES}
     for row in all_cands:
         st = row[2] or "New"
         if st in status_funnel:

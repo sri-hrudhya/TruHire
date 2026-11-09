@@ -5,6 +5,15 @@ export const MAX_LOCATIONS = 10;
 export const MAX_POSITIONS = 10000;
 // The client dropdown's last choice: the recruiter types the name.
 export const OTHER_CLIENT = '__other__';
+// Fixed list of people a demand can be owned by (shown in the editor's Demand Owner dropdown).
+export const DEMAND_OWNERS = Object.freeze([
+  'Akshitha Margani',
+  'Anurag Bohini',
+  'Chandra Teja Allamsetty',
+  'Manvitha Kamuni',
+  'Rama Devi Badhri',
+  'Swathi Priya Nadindla',
+]);
 export const MAX_CANCELLATION_REASON = 1000;
 
 // A date-only value ("2026-11-01") shows as the same calendar day in every timezone.
@@ -52,7 +61,7 @@ export const RESUME_LINKED = ['Mapped', 'Fulfilled'];
 
 // Form values -> API payload. Blank means "not stated" (null), so clearing a field is expressible.
 // The reason / resume ids are only sent with the status that needs them.
-export function detailsPayload({ demandId, locations, clientName, experience, experienceMax, noOfPositions, startDate, endDate, status, cancellationReason, candidateIds }) {
+export function detailsPayload({ demandId, locations, clientName, demandOwner, currentStatus, experience, experienceMax, noOfPositions, startDate, endDate, status, cancellationReason, candidateIds }) {
   const text = (v) => (v || '').trim() || null;
   return {
     ...(status === CANCELLED ? { cancellation_reason: text(cancellationReason) } : {}),
@@ -61,6 +70,8 @@ export function detailsPayload({ demandId, locations, clientName, experience, ex
     locations: (locations || []).map((p) => (p || '').trim()).filter(Boolean),
     no_of_positions: blank(noOfPositions) ? null : Number(noOfPositions),
     client_name: text(clientName),
+    demand_owner: text(demandOwner),
+    current_status: text(currentStatus),
     experience_years: blank(experience) ? null : Number(experience),
     experience_max_years: blank(experienceMax) ? null : Number(experienceMax),
     start_date: startDate || null,
@@ -100,7 +111,7 @@ export const HISTORY_ACTION_LABELS = Object.freeze({
 
 const FIELD_LABELS = {
   title: 'Title', jd_text: 'Specification', role: 'Role', experience_years: 'Min experience (yrs)', experience_max_years: 'Max experience (yrs)', no_of_positions: 'No. of positions', work_mode: 'Work mode', start_date: 'Start date',
-  end_date: 'End date', location: 'Location', client_name: 'Client', status: 'Demand status', demand: 'Practice', reason: 'Reason',
+  end_date: 'End date', location: 'Location', client_name: 'Client', demand_owner: 'Demand owner', current_status: 'Current status', status: 'Demand status', demand: 'Practice', reason: 'Reason',
   cancellation_reason: 'Cancellation reason', mapped_resumes: 'Resumes',
 };
 const show = (v) => (v === null || v === undefined || v === '' ? 'empty' : String(v));

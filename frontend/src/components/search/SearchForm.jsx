@@ -39,7 +39,7 @@ export default function SearchForm({ s }) {
           <select className="input-field" value={s.jdId} onChange={(e) => s.selectJd(e.target.value)}>
             <option value="">{s.categoryId ? `Any ${category?.name || 'category'} requirement (keywords only)` : 'No requirement (keywords only)'}</option>
             {choices.map((jd) => (
-              <option key={jd.id} value={jd.id}>{jd.display_id ? `${jd.display_id} · ` : ''}{jd.title}</option>
+              <option key={jd.id} value={jd.id}>{jd.display_id || 'No ID'} - {jd.client_name?.trim() || 'No client'} - {jd.title}</option>
             ))}
           </select>
         </label>
@@ -53,6 +53,13 @@ export default function SearchForm({ s }) {
       </div>
 
       <div className="search-filters">
+        <label className="search-field">
+          <span className="input-label">Client requirements</span>
+          <select className="input-field" value={s.clientName} onChange={(e) => s.setClientName(e.target.value)}>
+            <option value="">Any client</option>
+            {s.clientNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
         <label className="search-field">
           <span className="input-label">Minimum years</span>
           <input className="input-field" type="number" min="0" step="0.5" value={s.minExp} onChange={(e) => s.setMinExp(e.target.value)} />

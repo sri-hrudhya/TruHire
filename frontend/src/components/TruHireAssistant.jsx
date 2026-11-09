@@ -216,6 +216,31 @@ export default function TruHireAssistant() {
                   {message.data?.action === 'matches' && (
                     <div className="truhire-assistant-results">{message.data.results.slice(0, message.data.position.no_of_positions).map((row, i) => <div key={row.candidate?.id || i}><b>{i + 1}. {row.candidate?.candidate_name || row.candidate_name}</b> <span>{typeof row.match_score === 'number' ? `${row.match_score.toFixed(1)}%` : ''}</span></div>)}</div>
                   )}
+                  {message.data?.action === 'client_candidate_matches' && (message.data.client_groups || []).map((group) => (
+                    <section className="truhire-assistant-client-requirements" key={group.position.id}>
+                      <strong>{group.position.title}</strong><small>{group.position.client_name} · {group.total_matches} matches</small>
+                      {group.results.map((row) => <a key={row.candidate.id} href={`/candidates/${row.candidate.id}`}>
+                        <b>{row.candidate.candidate_name}</b><small>{typeof row.match_score === 'number' ? `${row.match_score.toFixed(1)}% match` : 'Open candidate profile'}</small>
+                      </a>)}
+                      {!group.results.length && <span>No candidates matched this requirement.</span>}
+                    </section>
+                  ))}
+                  {message.data?.action === 'candidate_history' && <div className="truhire-assistant-results">
+                    {message.data.items.map((event, i) => <div key={`${event.timestamp}-${i}`}><b>{event.summary}</b><small>{[new Date(event.timestamp).toLocaleString(), event.position_title, event.client_name].filter(Boolean).join(' · ')}</small></div>)}
+                  </div>}
+                  {message.data?.action === 'candidate_comparison' && <div className="truhire-assistant-results">
+                    {message.data.candidates.map((candidate) => <a key={candidate.id} href={`/candidates/${candidate.id}`}>
+                      <b>{candidate.display_id} · {candidate.name}</b>
+                      <small>{candidate.years_experience ?? 'Experience not recorded'} years · {candidate.status}</small>
+                      <small>Skills: {candidate.skills.join(', ') || 'Not recorded'}</small>
+                    </a>)}
+                  </div>}
+                  {message.data?.action === 'candidate_lookup' && <div className="truhire-assistant-results">
+                    {message.data.results.map((candidate) => <a key={candidate.id} href={`/candidates/${candidate.id}`}>
+                      <b>{candidate.display_id} · {candidate.candidate_name}</b>
+                      <small>{[candidate.current_company, candidate.email, candidate.phone, candidate.status].filter(Boolean).join(' · ')}</small>
+                    </a>)}
+                  </div>}
                   {message.data?.action === 'email' && <button type="button" className="btn btn-secondary assistant-action" onClick={() => { window.location.href = `/email?position=${message.data.position_id}`; }}>Open Email drafts</button>}
                   {message.data?.action === 'created' && message.data.position?.id && <button type="button" className="btn btn-secondary assistant-action" onClick={() => { window.location.href = `/requirements?id=${message.data.position.id}`; }}>Open this demand</button>}
                   {message.data?.action === 'choose_position' && message.data.positions?.length > 0 && (

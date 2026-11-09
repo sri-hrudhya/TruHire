@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import SessionLocal, get_db
-from backend.models import Conversation, ConversationMessage, Position, User
+from backend.models import Candidate, CandidateActivity, Conversation, ConversationMessage, Position, User
 from backend.routers import assistant_demand
+from backend.services.candidates.directory import filter_directory
+from backend.services.common.payloads import candidate_payload
 from backend.routers.ingestion import process_batch
 from backend.services.ingestion.doc_kind import detect_document_kind
 from backend.services.ingestion.parsing import YEARS_EXP_PATTERN, extract_text_from_file, is_supported_jd_file
@@ -24,6 +26,7 @@ from backend.services.llm.scope import GREETING_REPLY, REFUSAL, is_greeting, is_
 from backend.services.common import ai_audit
 from backend.services.retrieval.search import execute_candidate_search
 from backend.services.retrieval.filters import extract_jd_filters
+from backend.services.retrieval.client_search import search_client_requirements
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
@@ -99,6 +102,22 @@ def _position_choices(db: Session) -> List[dict]:
          "client_name": p.client_name, "demand_id": p.demand_id, "demand_name": p.demand.name if p.demand else None}
         for p in db.query(Position).order_by(Position.created_at.desc()).limit(50).all()
     ]
+
+
+def _candidate_lookup_terms(message: str) -> str:
+    email = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", message)
+    if email:
+        return email.group(0)
+    phone = re.search(r"(?<!\w)\+?\d[\d() .-]{5,}\d(?!\w)", message)
+    if phone:
+        return phone.group(0)
+    ignored = {"candidate", "candidates", "person", "people", "applicant", "applicants", "profile", "resume",
+               "search", "find", "look", "locate", "identify", "show", "list", "give", "me", "name", "named",
+               "called", "email", "phone", "mobile", "contact", "number", "current", "company", "employer",
+               "working", "works", "at", "with", "by", "from", "who", "is", "has", "have", "the", "a", "an",
+               "of", "for", "please", "can", "you", "near", "matching", "matches", "and", "or"}
+    return " ".join(token for token in re.findall(r"[A-Za-z0-9@.+_-]+", message)
+                     if token.casefold() not in ignored)
 
 
 def _client_demand_action(db: Session, message: str) -> Optional[tuple]:
@@ -406,7 +425,67 @@ def _route_message(db: Session, request: AssistantMessageRequest, user: User, co
     if client_action:
         return client_action
 
-    if any(term in lower for term in ("show candidates", "find candidates", "candidate matches", "matching candidates", "top candidates")):
+    has_candidate_ref = bool(re.search(r"\b(candidate|candidates|person|people|applicant|profile|resume)\b", lower))
+    lookup_cue = bool(re.search(r"\b(name|named|called|email|phone|mobile|contact|current\s+company|employer|working\s+at|works\s+at)\b", lower))
+    client_names = [name.strip() for (name,) in db.query(Position.client_name).filter(Position.client_name.isnot(None)).distinct().all() if name and name.strip()]
+    is_client_request = any(name.casefold() in lower for name in client_names) and re.search(r"\b(for|client|demand|requirement)\b", lower)
+    if has_candidate_ref and lookup_cue and not is_client_request and re.search(r"\b(find|search|look|locate|identify|show|list|give)\b", lower):
+        terms = _candidate_lookup_terms(request.message)
+        if len(terms) < 2:
+            return "Tell me at least part of the candidate's name, email, phone number, or current company.", {"action": "reply"}
+        lookup = filter_directory(db.query(Candidate), terms).limit(20).all()
+        return (f"I found {len(lookup)} close candidate match{'es' if len(lookup) != 1 else ''}. Check the contact and profile details before selecting one." if lookup
+                else "I couldn't find a close match. Try a shorter name, email, phone number, or current company."), {
+                    "action": "candidate_lookup", "query": terms,
+                    "results": [candidate_payload(person) for person in lookup]}
+
+    if re.search(r"\bcompare\b", lower):
+        ids = list(dict.fromkeys(re.findall(r"\bTRU-CN-\d+\b", request.message, re.I)))[:3]
+        if len(ids) < 2:
+            return "To compare candidates, include at least two TruHire candidate IDs (for example, TRU-CN-0001 and TRU-CN-0002).", {"action": "reply"}
+        people = db.query(Candidate).filter(Candidate.display_id.in_(ids)).all()
+        if len(people) != len(ids):
+            return "I couldn't resolve every candidate ID. Check the IDs and try again.", {"action": "reply"}
+        return "Here is a side-by-side comparison of the recorded candidate profiles. Review the source resumes before making a decision.", {
+            "action": "candidate_comparison", "candidates": [{"id": person.id,
+                "display_id": person.display_id, "name": person.candidate_name,
+                "status": person.status, "years_experience": person.years_experience,
+                "skills": person.extracted_skills or [], "education": person.education}
+                for person in people]}
+
+    if re.search(r"\b(history|activity|timeline)\b", lower) and re.search(r"\b(candidate|person|applicant)\b", lower):
+        display_id = re.search(r"\bTRU-CN-\d+\b", request.message, re.I)
+        candidate = db.query(Candidate).filter(Candidate.display_id.ilike(display_id.group(0))).first() if display_id else None
+        if candidate is None:
+            name_terms = [term for term in re.findall(r"[A-Za-z][A-Za-z'-]{1,}", request.message)
+                          if term.casefold() not in {"show", "find", "candidate", "person", "applicant", "history", "activity", "timeline", "with", "truhire", "the", "for", "please"}]
+            if name_terms:
+                candidates = db.query(Candidate).filter(Candidate.candidate_name.ilike(f"%{name_terms[0]}%")).limit(2).all()
+                candidate = candidates[0] if len(candidates) == 1 else None
+        if candidate is None:
+            return "Which candidate should I look up? Include their TruHire candidate ID so I can avoid choosing the wrong profile.", {"action": "reply"}
+        events = (db.query(CandidateActivity).filter(CandidateActivity.candidate_id == candidate.id)
+                  .order_by(CandidateActivity.occurred_at.desc(), CandidateActivity.id.desc()).limit(10).all())
+        return (f"Here is the recorded TruHire history for {candidate.display_id or 'this candidate'}." if events
+                else f"There is no recorded TruHire activity for {candidate.display_id or 'this candidate'} yet."), {
+                    "action": "candidate_history", "candidate_id": candidate.id,
+                    "candidate_display_id": candidate.display_id,
+                    "items": [{"event_type": row.event_type, "timestamp": row.occurred_at.isoformat(),
+                               "summary": row.summary, "client_name": row.client_name,
+                               "position_title": row.position_title} for row in events]}
+
+    candidate_intent = bool(re.search(r"\b(find|search|show|match|recommend|rank)\b.{0,100}\bcandidates?\b", lower))
+    if candidate_intent:
+        positions = db.query(Position).filter(Position.client_name.isnot(None),
+                         Position.status.is_(None) | (Position.status != "Cancelled")).all()
+        clients = sorted({(p.client_name or "").strip() for p in positions if (p.client_name or "").strip()}, key=len, reverse=True)
+        client_name = next((name for name in clients if name.casefold() in lower), None)
+        if client_name:
+            result = search_client_requirements(db, client_name, "", top_n=10)
+            reply = (f"I searched the active saved requirements for {client_name}. Candidates are grouped under each requirement; review the resume evidence and scores before making a decision."
+                     if result.get("client_groups") else f"I couldn't find active saved requirements for {client_name}.")
+            return reply, {"action": "client_candidate_matches", "client_name": client_name,
+                           "client_groups": result.get("client_groups", []), "total_matches": result.get("total_matches", 0)}
         position = _find_position(db, request.message, request.position_id)
         if not position:
             reply = "Which requirement should I use? Select one below or mention its TRU-JD ID."

@@ -20,6 +20,12 @@ export default function useSearch() {
   const [categoryId, setCategoryId] = useState('');
   const [locations, setLocations] = useState([]);
   const [role, setRole] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [clientNames, setClientNames] = useState([]);
+  const [candidateLookup, setCandidateLookup] = useState('');
+  const [candidateLookupResults, setCandidateLookupResults] = useState([]);
+  const [candidateLookupLoading, setCandidateLookupLoading] = useState(false);
+  const [candidateLookupError, setCandidateLookupError] = useState('');
   const [jdFilterInfo, setJdFilterInfo] = useState(null);
   const [positions, setPositions] = useState('');    // narrows the requirement choices to demands with this many positions
   const [topN, setTopN] = useState(null);
@@ -37,10 +43,11 @@ export default function useSearch() {
   useEffect(() => {
     (async () => {
       try {
-        const [jdRes, demandRes] = await Promise.all([jdApi.list(), demandApi.list().catch(() => ({ data: [] }))]);
+        const [jdRes, demandRes, clientsRes] = await Promise.all([jdApi.list(), demandApi.list().catch(() => ({ data: [] })), searchApi.clients().catch(() => ({ data: [] }))]);
         const cats = demandRes.data || [];
         setJds(jdRes.data);
         setDemands(cats);
+        setClientNames(clientsRes.data || []);
         const stored = resolveActiveCategory(cats, readStored(STORAGE_KEYS.searchCategory));
         setCategoryId(stored || '');
         if (!stored) writeStored(STORAGE_KEYS.searchCategory, '');
@@ -57,7 +64,8 @@ export default function useSearch() {
     const category = over.categoryId ?? categoryId;
     const locs = over.locations ?? locations;
     const rol = (over.role ?? role).trim();
-    const decision = searchDecision({ categoryId: category, jdId: jd, query, hasSkills: skills.length > 0, hasOtherFilters: locs.length > 0 || !!rol });
+    const client = (over.clientName ?? clientName).trim();
+    const decision = searchDecision({ categoryId: category, jdId: jd, query, hasSkills: skills.length > 0, hasOtherFilters: locs.length > 0 || !!rol || !!client });
     setNotice(null);
     if (decision.action !== 'run') {
       setResults(null);
@@ -74,6 +82,7 @@ export default function useSearch() {
         demand_id: decision.demandId,
         locations: locs,
         role: rol || null,
+        client_name: client || null,
         top_n: parseInt(effectiveTopN, 10),
       });
       setResults(res.data);
@@ -90,7 +99,7 @@ export default function useSearch() {
     } finally {
       setLoading(false);
     }
-  }, [chips, jdId, categoryId, locations, role, query, minExp, effectiveTopN]);
+  }, [chips, jdId, categoryId, locations, role, clientName, query, minExp, effectiveTopN]);
 
   const selectJd = async (id) => {
     setJdId(id);
@@ -128,7 +137,7 @@ export default function useSearch() {
 
   const reset = () => {
     rememberCategory('');
-    setQuery(''); setPositions(''); setLocations([]); setRole(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
+    setQuery(''); setPositions(''); setLocations([]); setRole(''); setClientName(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
     setResults(null); setNotice(null);
   };
 
@@ -149,8 +158,31 @@ export default function useSearch() {
     try { await exportApi.downloadCandidates(format, jdId || null); } catch { setNotice('Export failed. Check that you are signed in and try again.'); } finally { setExporting(null); }
   };
 
+  const lookupCandidates = async (event) => {
+    event?.preventDefault();
+    const needle = candidateLookup.trim();
+    if (needle.length < 2) {
+      setCandidateLookupResults([]);
+      setCandidateLookupError('Enter at least two characters to search candidate name, contact, email, or current company.');
+      return;
+    }
+    setCandidateLookupLoading(true);
+    setCandidateLookupError('');
+    try {
+      const response = await candidatesApi.list({ q: needle, limit: 20 });
+      setCandidateLookupResults(response.data.candidates || []);
+      if (!response.data.candidates?.length) setCandidateLookupError('No close candidate matches found. Try a shorter name, email, phone number, or company.');
+    } catch (error) {
+      setCandidateLookupResults([]);
+      setCandidateLookupError(error?.response?.data?.detail || 'Candidate lookup failed. Try again.');
+    } finally {
+      setCandidateLookupLoading(false);
+    }
+  };
+
   return {
-    query, setQuery, positions, setPositions, chips, minExp, setMinExp, jdId, categoryId, locations, setLocations, role, setRole, jdFilterInfo,
+    query, setQuery, positions, setPositions, chips, minExp, setMinExp, jdId, categoryId, locations, setLocations, role, setRole, clientName, setClientName, clientNames, jdFilterInfo,
+    candidateLookup, setCandidateLookup, candidateLookupResults, candidateLookupLoading, candidateLookupError, lookupCandidates,
     topN: effectiveTopN, setTopN, jds, demands, results, loading, notice, exporting,
     run, selectJd, selectCategory, removeChip, clearRoleLocation, reset, setCandidateStatus, exportCandidates,
   };

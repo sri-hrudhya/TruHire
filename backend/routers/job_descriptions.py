@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.services.common.payloads import candidate_payload
 from backend.models import (
-    Position, User, DEFAULT_DEMAND_NAMES, canonical_demand_id, Candidate, CandidateMatch, SearchState, Conversation, ConversationMessage, EmailRecord,
+    Position, User, DEFAULT_DEMAND_NAMES, canonical_demand_id, Candidate, CandidateActivity, CandidateMatch, SearchState, Conversation, ConversationMessage, EmailRecord,
     CandidateAssignment, CandidateComment, RequirementCandidateStatus, REQUIREMENT_STATUSES, DEFAULT_REQUIREMENT_STATUS, get_next_position_display_id,
     JD_STATUSES, LEGACY_JD_STATUS_ALIASES, DEFAULT_JD_STATUS, CLIENT_NAMES, RESUME_LINKED_JD_STATUSES, MAX_CANCELLATION_REASON_CHARS, HISTORY_ACTIONS, HISTORY_CREATED, HISTORY_UPDATED, HISTORY_DELETED, HISTORY_STATUS_CHANGED, RequirementHistory,
 )
@@ -31,6 +31,7 @@ router = APIRouter(tags=["job-descriptions"])
 
 
 MAX_DETAIL_CHARS = 200
+MAX_CURRENT_STATUS_CHARS = 500
 MAX_EXPERIENCE_YEARS = 60
 MAX_LOCATIONS = 10
 MAX_POSITIONS = 10_000
@@ -48,6 +49,9 @@ class JDDetails(BaseModel):
     locations: Optional[List[str]] = None
     no_of_positions: Optional[int] = Field(default=None, ge=0, le=MAX_POSITIONS)
     client_name: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
+    demand_owner: Optional[str] = Field(default=None, max_length=MAX_DETAIL_CHARS)
+    # Free-text "where the demand stands"; deliberately NOT one of JD_STATUSES.
+    current_status: Optional[str] = Field(default=None, max_length=MAX_CURRENT_STATUS_CHARS)
     experience_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)  # minimum
     experience_max_years: Optional[float] = Field(default=None, ge=0, le=MAX_EXPERIENCE_YEARS)
     start_date: Optional[date] = None
@@ -57,7 +61,7 @@ class JDDetails(BaseModel):
     cancellation_reason: Optional[str] = Field(default=None, max_length=MAX_CANCELLATION_REASON_CHARS)
     candidate_ids: Optional[List[str]] = None
 
-    @field_validator("role", "location", "client_name", "cancellation_reason", mode="before")
+    @field_validator("role", "location", "client_name", "cancellation_reason", "demand_owner", "current_status", mode="before")
     @classmethod
     def _blank_is_none(cls, value):
         if value is None:
@@ -163,6 +167,8 @@ class PositionResponse(BaseModel):
     locations: List[str] = []
     no_of_positions: Optional[int] = None
     client_name: Optional[str] = None
+    demand_owner: Optional[str] = None
+    current_status: Optional[str] = None
     experience_years: Optional[float] = None
     experience_max_years: Optional[float] = None
     start_date: Optional[date] = None
@@ -255,7 +261,7 @@ def invalidate_requirements_cache(jd_id: Optional[str] = None):
         clear_cache(f"requirements:matches:{jd_id}")
 
 
-TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "no_of_positions", "start_date", "end_date", "location", "client_name", "work_mode", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
+TRACKED_FIELDS = ("title", "jd_text", "role", "experience_years", "experience_max_years", "no_of_positions", "start_date", "end_date", "location", "client_name", "demand_owner", "current_status", "work_mode", "status", "demand_id", "cancellation_reason", "mapped_candidate_ids")
 _TEXT_PREVIEW_CHARS = 300
 
 
@@ -368,6 +374,8 @@ def _serialize_position(pos: Position, creator_name: Optional[str] = None, modif
         "locations": pos.locations if pos.locations is not None else [p for p in [pos.location or derived.get("location")] if p],
         "no_of_positions": pos.no_of_positions,
         "client_name": pos.client_name,
+        "demand_owner": pos.demand_owner,
+        "current_status": pos.current_status,
         "updated_at": pos.updated_at.isoformat() if pos.updated_at else None,
         "last_modified_at": (pos.updated_at or pos.created_at).isoformat() if (pos.updated_at or pos.created_at) else None,
         "last_modified_by": modifier_name or creator_name,
@@ -420,7 +428,8 @@ def create_jd(req: PositionCreateRequest, db: Session, user: User, source: str =
         status=DEFAULT_JD_STATUS,
         role=req.role, location=req.location, locations=req.locations or None,
         no_of_positions=req.no_of_positions,
-        client_name=req.client_name, experience_years=req.experience_years,
+        client_name=req.client_name, demand_owner=req.demand_owner, current_status=req.current_status,
+        experience_years=req.experience_years,
         experience_max_years=req.experience_max_years, start_date=req.start_date, end_date=req.end_date,
     )
     if req.demand_id:
@@ -528,7 +537,7 @@ def update_jd(jd_id: str, req: PositionUpdateRequest, db: Session, user: Optiona
         pos.original_filename = req.original_filename
         changed = True
     # Detail fields: a field the client sent (even as null) is applied, so a value can be cleared.
-    for field in ("role", "location", "locations", "no_of_positions", "client_name", "experience_years", "experience_max_years", "start_date", "end_date"):
+    for field in ("role", "location", "locations", "no_of_positions", "client_name", "demand_owner", "current_status", "experience_years", "experience_max_years", "start_date", "end_date"):
         if field not in req.model_fields_set:
             continue
         value = getattr(req, field)
@@ -775,9 +784,17 @@ def set_requirement_candidate_status(jd_id: str, candidate_id: str, status: str,
     if row is None:
         row = RequirementCandidateStatus(position_id=jd_id, candidate_id=candidate_id)
         db.add(row)
+    previous = row.status
     row.status = status
     row.updated_by = user.id
     row.updated_at = datetime.utcnow()
+    if previous != status:
+        position = db.get(Position, jd_id)
+        db.add(CandidateActivity(candidate_id=candidate_id, event_type="requirement_status_changed",
+                                 actor_id=user.id, actor_name=user.name, occurred_at=row.updated_at,
+                                 position_id=jd_id, position_title=position.title if position else None,
+                                 client_name=position.client_name if position else None,
+                                 summary=f"Review status changed from {previous or DEFAULT_REQUIREMENT_STATUS} to {status}."))
     db.commit()
     return {"position_id": jd_id, "candidate_id": candidate_id, "status": row.status,
             "updated_by": row.updated_by, "updated_at": row.updated_at.isoformat()}

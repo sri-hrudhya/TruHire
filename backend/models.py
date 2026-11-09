@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, Integer, Float, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, String, Integer, Float, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index, Boolean, func
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
@@ -33,6 +33,13 @@ OTHERS_DEMAND_NAME = "Others"
 
 def canonical_demand_id(name: str) -> str:
     return f"default-demand-{name.lower()}"
+
+
+def get_demand_display_id(demand_id: Optional[str]) -> Optional[str]:
+    for index, name in enumerate(DEFAULT_DEMAND_NAMES, start=1):
+        if demand_id == canonical_demand_id(name):
+            return f"TRU-DM-{index:02d}"
+    return None
 
 
 class Demand(Base):
@@ -85,6 +92,8 @@ class Position(Base):
     end_date = Column(Date, nullable=True)
     location = Column(String, nullable=True)
     client_name = Column(String, nullable=True)  # optional; NULL = not stated
+    demand_owner = Column(String, nullable=True)  # free-text owner name shown on demand cards; NULL = not stated
+    current_status = Column(Text, nullable=True)  # free-text "where the demand stands"; separate from the lifecycle `status`
     updated_at = Column(DateTime, nullable=True)  # last modified; NULL = never changed since creation
     updated_by = Column(String, nullable=True)  # user id of the last modifier; NULL = unknown / never changed
     cancellation_reason = Column(Text, nullable=True)  # only while status is Cancelled
@@ -92,6 +101,7 @@ class Position(Base):
     creator = relationship("User", back_populates="positions")
     demand = relationship("Demand", back_populates="positions")
     matches = relationship("CandidateMatch", back_populates="position", cascade="all, delete-orphan")
+    __table_args__ = (Index("idx_position_client_name_normalized", func.lower(func.trim(client_name))),)
 
 
 class IngestionBatch(Base):
@@ -109,6 +119,8 @@ class IngestionBatch(Base):
     # file {filename, status, detail} with status queued/extracting/analyzing/embedding/indexing/indexed/duplicate/failed.
     stage = Column(String, default="queued")
     file_status = Column(JSON, default=list)
+    # Set by POST /batches/{id}/cancel; process_batch checks it between files and before indexing.
+    cancel_requested = Column(Boolean, default=False, nullable=True)
     creator = relationship("User", back_populates="batches")
     candidates = relationship("Candidate", back_populates="batch")
 
@@ -121,7 +133,10 @@ class Candidate(Base):
     resume_file_url = Column(String, nullable=True)
     candidate_name = Column(String, nullable=False, index=True)
     email = Column(String, nullable=True, index=True)
+    email_norm = Column(String, nullable=True, index=True)
     phone = Column(String, nullable=True)
+    phone_norm = Column(String, nullable=True, index=True)
+    current_company = Column(String, nullable=True, index=True)
     extracted_skills = Column(JSON, default=list)
     years_experience = Column(Float, default=0.0)
     education = Column(Text, nullable=True)
@@ -135,6 +150,10 @@ class Candidate(Base):
     status = Column(String, default="New", index=True)
     status_updated_by = Column(String, nullable=True)
     status_updated_at = Column(DateTime, nullable=True)
+    # Global talent availability is independent of per-requirement hiring stage.
+    availability_status = Column(String, nullable=True, default="Active", index=True)
+    availability_updated_by = Column(String, nullable=True)
+    availability_updated_at = Column(DateTime, nullable=True)
     # Notice period as stated by the recruiter: a non-negative number plus a unit (see NOTICE_PERIOD_UNITS).
     notice_period_value = Column(Float, nullable=True)
     notice_period_unit = Column(String, nullable=True)
@@ -176,6 +195,8 @@ class SearchState(Base):
     location = Column(String, nullable=True)
     role = Column(String, nullable=True)
     position_id = Column(String, ForeignKey("positions.id", ondelete="SET NULL"), nullable=True, index=True)
+    client_name = Column(String, nullable=True)
+    client_groups = Column(JSON, default=list)
     top_n = Column(Integer, default=20, nullable=False)
     results = Column(JSON, default=list)
     total_matches = Column(Integer, default=0, nullable=False)
@@ -232,9 +253,9 @@ class AssistantDemandSession(Base):
     conversation = relationship("Conversation", back_populates="demand_sessions")
 
 
-CANDIDATE_STATUSES = ("New", "Shortlisted", "Interviewed", "Rejected")  # global pipeline stage of a candidate
-REQUIREMENT_STATUSES = ("Pending Review", "Shortlisted", "Not Shortlisted")
-DEFAULT_REQUIREMENT_STATUS = "Pending Review"
+CANDIDATE_STATUSES = ("New", "Shortlisted", "Interviewed", "Rejected")
+REQUIREMENT_STATUSES = CANDIDATE_STATUSES
+DEFAULT_REQUIREMENT_STATUS = "New"
 
 
 class RequirementCandidateStatus(Base):
@@ -275,6 +296,22 @@ class CandidateComment(Base):
     author = relationship("User", foreign_keys=[author_id])
 
 
+class CandidateActivity(Base):
+    """Privacy-conscious append-only timeline event; snapshots survive JD edits/deletion."""
+    __tablename__ = "candidate_activities"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    candidate_id = Column(String, ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String, nullable=False)
+    occurred_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    actor_id = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    actor_name = Column(String, nullable=True)
+    position_id = Column(String, nullable=True)
+    position_title = Column(String, nullable=True)
+    client_name = Column(String, nullable=True)
+    summary = Column(String(500), nullable=False)
+    __table_args__ = (Index("idx_candidate_activity_history", "candidate_id", "occurred_at", "id"),)
+
+
 EMAIL_STATUS_SENT = "sent"
 EMAIL_STATUS_SIMULATED = "simulated"
 EMAIL_STATUS_FAILED = "failed"
@@ -299,6 +336,7 @@ class RequirementHistory(Base):
     item_display_id = Column(String, nullable=True)
     item_title = Column(String, nullable=True)
     demand_id = Column(String, nullable=True, index=True)
+    demand_display_id = Column(String, nullable=True)
     demand_name = Column(String, nullable=True)
     user_id = Column(String, nullable=True)
     user_name = Column(String, nullable=True)
@@ -376,9 +414,13 @@ def _max_existing_display_number(db, model, prefix: str) -> int:
 
 def seed_id_sequence(db, model, prefix: str) -> None:
     """Create the counter row if missing, starting after the highest ID already issued."""
-    if db.query(IdSequence).filter(IdSequence.name == prefix).first() is None:
-        db.add(IdSequence(name=prefix, value=_max_existing_display_number(db, model, prefix)))
+    row = db.query(IdSequence).filter(IdSequence.name == prefix).first()
+    existing_max = _max_existing_display_number(db, model, prefix)
+    if row is None:
+        db.add(IdSequence(name=prefix, value=existing_max))
         db.flush()
+    elif row.value < existing_max:
+        row.value = existing_max
 
 
 def _next_display_id(db, model, prefix: str) -> str:

@@ -290,6 +290,15 @@ def _clean_job_titles(values) -> List[str]:
     return [t for t in clean_titles(values) if not _SUSPICIOUS_FIELD.search(t) and t.lower() not in _UNKNOWN_VALUES]
 
 
+def _clean_company(value) -> str:
+    company = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n,;|•·-")
+    if not company or len(company) > 100 or company.casefold() in _UNKNOWN_VALUES or _SUSPICIOUS_FIELD.search(company):
+        return ""
+    if re.search(r"https?://|@|\b(?:ignore|instruction|shortlist|reject)\b", company, re.I):
+        return ""
+    return company
+
+
 _UNKNOWN_VALUES = {"n/a", "na", "none", "null", "unknown", "not specified", "not stated", "not available", "not provided", "-"}
 
 
@@ -313,6 +322,7 @@ def validate_resume_fields(data: Dict) -> Dict:
         "education": education,
         "location": _clean_location(data.get("location")),
         "job_titles": _clean_job_titles(data.get("job_titles")),
+        "current_company": _clean_company(data.get("current_company")),
     }
 
 
@@ -332,6 +342,8 @@ the header or contact block; "" if the resume does not state one - never infer i
 employer or phone number),
 job_titles (array of job titles the candidate has held, most recent / current first, each exactly as
 written in the resume, e.g. "Senior Backend Engineer"; [] if none are stated - never invent titles).
+current_company (the employer in the most recent/current work entry, copied exactly as written; "" if
+the resume does not make the current employer clear - never infer it from contact details or location).
 
 {untrusted("resume_filename", filename[:200])}
 {untrusted("resume_text", window)}"""
@@ -372,6 +384,7 @@ def llm_parse_resume(raw_text: str, filename: str) -> Optional[Dict]:
         "location": head["location"] or next((r["location"] for r in ok if r["location"]), ""),
         # Windows are consecutive slices of the same resume, so concatenating keeps recency order.
         "job_titles": _clean_job_titles([t for r in ok for t in r["job_titles"]]),
+        "current_company": head.get("current_company") or next((r["current_company"] for r in ok if r["current_company"]), ""),
     }
 
 

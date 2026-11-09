@@ -204,6 +204,7 @@ export default function JobDescriptionsPage() {
               onDelete={setDeleting}
               onDuplicate={duplicate}
               onCreate={create}
+              onUpdateField={r.updateJdFields}
             />
           </>
         ) : (

@@ -25,7 +25,7 @@ run('details validation: experience range and date order', () => {
 
 run('detailsPayload turns blanks into null and trims text', () => {
   assert.deepEqual(detailsPayload({ role: 'ignored', locations: ['  Pune ', '', 'Mumbai'], experience: '', startDate: '', endDate: '', status: 'Open' }),
-    { locations: ['Pune', 'Mumbai'], no_of_positions: null, client_name: null, experience_years: null, experience_max_years: null, start_date: null, end_date: null, status: 'Open' });
+    { locations: ['Pune', 'Mumbai'], no_of_positions: null, client_name: null, demand_owner: null, current_status: null, experience_years: null, experience_max_years: null, start_date: null, end_date: null, status: 'Open' });
   assert.equal(detailsPayload({ noOfPositions: '3', status: 'Open' }).no_of_positions, 3);
   assert.deepEqual(detailsPayload({ locations: [], status: 'Open' }).locations, []);  // an empty list clears the places
   assert.equal(detailsPayload({ experience: '0', status: 'Open' }).experience_years, 0);

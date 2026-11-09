@@ -127,7 +127,14 @@ def _search_cache_key(query_text: str, filter_skills: Optional[List[str]], min_e
         "filters": filters.cache_part(),
         # Any index write changes the epoch, so cached results never outlive the index state.
         "epoch": get_index_epoch(),
-        "rerank": settings.RERANKER_ENABLED and settings.RERANKER_MODEL,
+        # A cache entry is only valid for the complete retrieval/scoring configuration.
+        "embedding": {"provider": settings.EMBEDDING_PROVIDER, "model": settings.EMBEDDING_MODEL or settings.LOCAL_EMBEDDING_MODEL,
+                      "vllm_model": settings.VLLM_EMBEDDING_MODEL},
+        "vector_collection": settings.QDRANT_COLLECTION,
+        "lexical_index": settings.OPENSEARCH_INDEX,
+        "chunking_version": "resume-chunk-v1",
+        "rerank": {"enabled": settings.RERANKER_ENABLED, "model": settings.RERANKER_MODEL},
+        "score_weights": [settings.HYBRID_VECTOR_WEIGHT, settings.HYBRID_LEXICAL_WEIGHT],
     }, sort_keys=True)
     return "search:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

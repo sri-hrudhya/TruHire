@@ -6,15 +6,15 @@ import { errorText } from '../lib/errors';
 
 
 const REQUIREMENT_STATUS_BADGE = {
-  'Pending Review': 'badge-neutral',
+  New: 'badge-neutral',
   Shortlisted: 'badge-success',
-  'Not Shortlisted': 'badge-danger',
+  Rejected: 'badge-danger',
 };
 
 function RequirementStatusBadge({ status }) {
   return (
     <span className={`badge ${REQUIREMENT_STATUS_BADGE[status] || 'badge-neutral'}`} style={{ fontSize: '0.7rem' }}>
-      {status || 'Pending Review'}
+      {status || 'New'}
     </span>
   );
 }
@@ -37,8 +37,8 @@ const newKey = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `
  * Candidate table with selection. Only candidates Shortlisted for the requirement and
  * having an email address can be selected.
  */
-// Shortlisted candidates get an invitation, Not Shortlisted candidates a polite regret email.
-export const EMAILABLE_STATUSES = ['Shortlisted', 'Not Shortlisted'];
+// Shortlisted candidates get an invitation; rejected candidates can receive a polite regret email.
+export const EMAILABLE_STATUSES = ['Shortlisted', 'Rejected'];
 const canEmail = (c) => EMAILABLE_STATUSES.includes(c.requirement_status) && Boolean(c.email);
 
 export function RecipientSelector({ candidates, selectedIds, onChange, onStatusChange }) {
@@ -86,7 +86,7 @@ export function RecipientSelector({ candidates, selectedIds, onChange, onStatusC
                       checked={selectedIds.includes(c.id)}
                       disabled={!canSelect}
                       onChange={() => toggle(c.id)}
-                      title={canSelect ? '' : c.email ? 'Set the status to Shortlisted or Not Shortlisted to email this candidate' : 'No email address on file'}
+                      title={canSelect ? '' : c.email ? 'Set the requirement status to Shortlisted or Rejected to email this candidate' : 'No email address on file'}
                     />
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 700 }}>{c.display_id || '—'}</td>

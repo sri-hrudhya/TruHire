@@ -14,6 +14,7 @@ import IngestionHistoryPage from './pages/IngestionHistoryPage';
 import JobDescriptionsPage from './pages/JobDescriptionsPage';
 import SearchPage from './pages/SearchPage';
 import CandidateDetailPage from './pages/CandidateDetailPage';
+import CandidateHistoryPage from './pages/CandidateHistoryPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import EmailPage from './pages/EmailPage';
 import AIAuditPage from './pages/AIAuditPage';
@@ -101,6 +102,7 @@ export default function App() {
               <Route path="/positions" element={<Navigate to="/requirements" replace />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/email" element={<EmailPage />} />
+              <Route path="/candidate-history" element={<CandidateHistoryPage />} />
               <Route path="/candidates/:id" element={<CandidateDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/ai-audit" element={<AdminOnly><AIAuditPage /></AdminOnly>} />

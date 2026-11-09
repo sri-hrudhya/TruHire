@@ -29,6 +29,11 @@ def ctx():
         db.query(Position).filter(Position.id == pid).delete(synchronize_session=False)
     db.query(RequirementHistory).filter(RequirementHistory.user_id == user.id).delete(synchronize_session=False)
     db.query(Position).filter(Position.created_by == user.id).delete(synchronize_session=False)
+    # The fulfilled-status case creates a candidate owned by this fixture. Remove it
+    # before its uploader or PostgreSQL correctly rejects deleting the referenced user.
+    for candidate in db.query(Candidate).filter(Candidate.uploaded_by == user.id).all():
+        db.delete(candidate)
+    db.flush()
     db.delete(user)
     db.commit()
     db.close()

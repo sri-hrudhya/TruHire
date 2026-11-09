@@ -216,6 +216,8 @@ class Settings(BaseSettings):
 
     # Redis connection settings
     REDIS_URL: Optional[str] = None
+    CACHE_REDIS_URL: Optional[str] = None
+    QUEUE_REDIS_URL: Optional[str] = None
     REDIS_HOST: Optional[str] = "127.0.0.1"
     REDIS_PORT: int = 6379
     REDIS_PASSWORD: Optional[str] = None
@@ -233,18 +235,32 @@ class Settings(BaseSettings):
             return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
         return None
 
+    @property
+    def effective_cache_redis_url(self) -> Optional[str]:
+        return (self.CACHE_REDIS_URL or "").strip() or self.effective_redis_url
+
+    @property
+    def effective_queue_redis_url(self) -> Optional[str]:
+        return (self.QUEUE_REDIS_URL or "").strip() or self.effective_redis_url
+
     def get_arq_redis_settings(self):
         """Returns arq RedisSettings with unquoted password to avoid authentication failure."""
         from arq.connections import RedisSettings
         from urllib.parse import unquote
+        queue_url = self.effective_queue_redis_url
+        if self.QUEUE_REDIS_URL and queue_url:
+            rs = RedisSettings.from_dsn(queue_url)
+            if rs.password:
+                rs.password = unquote(rs.password)
+            return rs
         if self.REDIS_PASSWORD and self.REDIS_HOST:
             return RedisSettings(
                 host=self.REDIS_HOST,
                 port=self.REDIS_PORT,
                 password=self.REDIS_PASSWORD,
             )
-        if self.effective_redis_url:
-            rs = RedisSettings.from_dsn(self.effective_redis_url)
+        if queue_url:
+            rs = RedisSettings.from_dsn(queue_url)
             if rs.password:
                 rs.password = unquote(rs.password)
             return rs

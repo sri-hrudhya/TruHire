@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { UploadCloud, FileText, Search, BarChart3, Mail, ShieldCheck, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { UploadCloud, FileText, Search, BarChart3, Mail, ShieldCheck, Users, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { isAdmin } from '../lib/review';
 
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { name: 'Ingestion', path: '/ingestion', icon: UploadCloud, end: false },
   { name: 'Requirements', path: '/requirements', icon: FileText, end: true },
   { name: 'Search', path: '/search', icon: Search, end: true },
+  { name: 'Candidate History', path: '/candidate-history', icon: Users, end: true },
   { name: 'Email', path: '/email', icon: Mail, end: true },
   { name: 'Analytics', path: '/analytics', icon: BarChart3, end: true },
   { name: 'AI Audit', path: '/ai-audit', icon: ShieldCheck, end: true, adminOnly: true },

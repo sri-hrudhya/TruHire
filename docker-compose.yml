@@ -86,7 +86,12 @@ services:
       - "127.0.0.1:${BACKEND_PORT:-8999}:8999"  # nginx (the frontend container) is the public entry
     environment: &backend-env
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-truhire}:${POSTGRES_PASSWORD:-truhire_secret}@postgres:5432/${POSTGRES_DB:-truhire}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
       REDIS_URL: redis://redis:6379/0
+      CACHE_REDIS_URL: ${CACHE_REDIS_URL:-redis://redis:6379/1}
+      QUEUE_REDIS_URL: ${QUEUE_REDIS_URL:-redis://redis:6379/0}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       QDRANT_URL: ${QDRANT_URL:?Set QDRANT_URL to your Qdrant Cloud endpoint in .env}

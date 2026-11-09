@@ -6,6 +6,7 @@ from backend.models import User, SearchState
 from backend.auth import get_current_user
 from backend.services.retrieval.search import CategoryNotFound, RequirementRequired, parse_search_query, execute_candidate_search
 from backend.services.retrieval.filters import MAX_FILTER_CHARS, MAX_LOCATION_FILTERS, clean_filter_text
+from backend.services.retrieval.client_search import list_client_names, search_client_requirements
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 class SearchRequest(BaseModel):
@@ -22,6 +23,16 @@ class SearchRequest(BaseModel):
     # Several places at once: a candidate in any of them qualifies. Merged with `location` when both are sent.
     locations: Optional[List[str]] = Field(default=None, max_length=MAX_LOCATION_FILTERS)
     role: Optional[str] = Field(default=None, max_length=MAX_FILTER_CHARS * 2)
+    client_name: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("client_name", mode="before")
+    @classmethod
+    def _clean_client_name(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        return " ".join(value.split()) or None
 
     @field_validator("location", "role", mode="before")
     @classmethod
@@ -46,17 +57,22 @@ class SearchRequest(BaseModel):
 def get_search_state(db=Depends(get_db), user: User = Depends(get_current_user)):
     state = db.query(SearchState).filter(SearchState.user_id == user.id).first()
     # Saved searches from before requirement-only search have no position and are not restored.
-    if not state or not (state.position_id or state.query):
+    if not state or not (state.position_id or state.query or state.client_name):
         return {"state": None}
     return {"state": {
-        "query": state.query, "filter_skills": state.filter_skills or [],
+        "query": state.query, "filter_skills": state.filter_skills or [], "client_name": state.client_name,
         "min_experience": state.min_experience, "position_id": state.position_id,
         # Hard location/role filters are never restored: a forgotten one silently zeroes every later search.
         "location": None, "role": None,
         "top_n": state.top_n, "results": state.results or [],
         "total_matches": state.total_matches, "retrieval": state.retrieval or {},
+        "client_groups": state.client_groups or [],
         "updated_at": state.updated_at.isoformat() if state.updated_at else None
     }}
+
+@router.get("/clients")
+def search_clients(db=Depends(get_db), user: User = Depends(get_current_user)):
+    return list_client_names(db)
 
 @router.delete("/state")
 def clear_search_state(db=Depends(get_db), user: User = Depends(get_current_user)):
@@ -71,14 +87,19 @@ def search_candidates_endpoint(req: SearchRequest, db=Depends(get_db), user: Use
     min_exp = req.min_experience if req.min_experience is not None else parsed_exp
     places = req.places()
     try:
-        result = execute_candidate_search(db, clean_query, skills, min_exp, req.position_id, req.top_n or 20, places or None, req.role, req.demand_id)
+        if req.client_name:
+            result = search_client_requirements(db, req.client_name, clean_query, skills, min_exp,
+                                                req.top_n or 20, places or None, req.role,
+                                                req.demand_id, req.position_id)
+        else:
+            result = execute_candidate_search(db, clean_query, skills, min_exp, req.position_id, req.top_n or 20, places or None, req.role, req.demand_id)
     except CategoryNotFound:
         raise HTTPException(status_code=404, detail="Category not found.") from None
     except RequirementRequired:
         raise HTTPException(status_code=404, detail="Requirement not found.") from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    result.update({"active_filter_chips": skills, "min_experience": min_exp, "location": ", ".join(places) or None, "locations": places, "role": req.role, "modifier_mode": mode, "query": clean_query})
+    result.update({"active_filter_chips": skills, "min_experience": min_exp, "location": ", ".join(places) or None, "locations": places, "role": req.role, "modifier_mode": mode, "query": clean_query, "client_name": req.client_name})
 
     state = db.query(SearchState).filter(SearchState.user_id == user.id).first()
     if not state:
@@ -90,6 +111,8 @@ def search_candidates_endpoint(req: SearchRequest, db=Depends(get_db), user: Use
     state.location = ", ".join(places) or None
     state.role = req.role
     state.position_id = req.position_id or None
+    state.client_name = req.client_name
+    state.client_groups = result.get("client_groups", [])
     state.top_n = req.top_n or 20
     state.results = result.get("results", [])
     state.total_matches = int(result.get("total_matches", 0))

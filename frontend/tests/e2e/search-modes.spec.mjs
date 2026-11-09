@@ -23,10 +23,10 @@ const candidate = (id, name, skills) => ({
   candidate: { id, display_id: `TRU-CN-${id}`, candidate_name: name, email: `${id}@example.com`, extracted_skills: skills,
     years_experience: 6, education: 'BSc', status: 'New', uploaded_at: '2026-01-02T00:00:00', location: 'Pune', job_titles: ['Engineer'] },
   match_score: 82.4, score_breakdown: { matched_skills: skills.slice(0, 1), missing_skills: [], semantic_score: 70, skill_score: 80, baseline_score: 20, experience_penalty: 0 },
-  llm_summary: `${name} fits.`, cited_quote: null, requirement_status: 'Pending Review', last_email: null,
+  llm_summary: `${name} fits.`, cited_quote: null, requirement_status: 'New', last_email: null,
 });
 const meta = {
-  roles: ['admin', 'recruiter'], requirement_statuses: ['Pending Review', 'Shortlisted', 'Not Shortlisted'], default_requirement_status: 'Pending Review',
+  roles: ['admin', 'recruiter'], requirement_statuses: ['New', 'Shortlisted', 'Interviewed', 'Rejected'], default_requirement_status: 'New',
   candidate_statuses: ['New', 'Shortlisted', 'Interviewed', 'Rejected'], email_statuses: ['pending', 'sent', 'simulated', 'failed'],
   page_sizes: { history: 25, audit: 25 }, search: { default_top_n: 20, max_top_n: 100 }, comment_max_chars: 2000, accepted_jd_file_types: ['.pdf', '.txt'],
 };

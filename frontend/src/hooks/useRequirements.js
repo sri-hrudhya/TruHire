@@ -73,7 +73,9 @@ export default function useRequirements() {
     next.set('id', jd.id);
     next.delete('view');
     if (jd.demand_id) next.set('demand', jd.demand_id);
-    setSearchParams(next, { replace: true });
+    // Push a history entry when opening a demand so the browser Back button returns to the
+    // cards; replace when the URL already points at this demand (initial load / URL sync).
+    setSearchParams(next, { replace: searchParams.get('id') === jd.id });
   }, [loadMatches, searchParams, setSearchParams]);
 
   // Back from a JD (or the editor) to its demand's cards.
@@ -157,16 +159,29 @@ export default function useRequirements() {
     }
   }, []);
 
-  // First load: restore the requirement named in the URL, else the first one.
+  // First load: fetch the list; the URL-sync effect below opens the requirement named in the URL.
   useEffect(() => {
-    (async () => {
-      const list = await loadJDs();
-      loadDemands();
-      const wanted = list.find((jd) => jd.id === searchParams.get('id'));
-      if (wanted) selectJd(wanted);
-    })();
+    loadJDs();
+    loadDemands();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the open demand in step with the URL so browser Back/Forward moves inside the
+  // section: no ?id shows the cards, an ?id opens that demand. (The create editor is
+  // component state, not a URL, so it is left alone here.)
+  useEffect(() => {
+    if (loading) return;
+    const wanted = searchParams.get('id');
+    if (!wanted) {
+      if (selectedJd) { setSelectedJd(null); setMatches([]); }
+      return;
+    }
+    if (selectedJd?.id === wanted) return;
+    const jd = jds.find((j) => j.id === wanted);
+    if (jd) selectJd(jd);
+    else { setSelectedJd(null); setMatches([]); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, jds, loading]);
 
   useEffect(() => {
     if (!isAdmin(user)) return;
@@ -255,6 +270,19 @@ export default function useRequirements() {
     }
   };
 
+  // Quick edits started from a demand card (e.g. the free-text current status): patch only the given fields.
+  const updateJdFields = async (jd, patch) => {
+    try {
+      const res = await jdApi.update(jd.id, patch);
+      setJds((prev) => prev.map((j) => (j.id === jd.id ? res.data : j)));
+      setSelectedJd((prev) => (prev?.id === jd.id ? res.data : prev));
+      return true;
+    } catch (err) {
+      setNotice({ type: 'error', message: errorText(err, 'Could not save the change.') });
+      return false;
+    }
+  };
+
   // The end date is tentative: set, change or clear it (null) without touching anything else.
   const changeEndDate = async (endDate) => {
     if (endDate && selectedJd.start_date && endDate < selectedJd.start_date) {
@@ -316,7 +344,7 @@ export default function useRequirements() {
   return {
     user, jds, visibleJds, demands, demandId, setDemand, clientName, setClient, selectedJd, creating, template, loading, loadError, loadJDs, loadDemands, notice, setNotice, groupBy, setGroupBy,
     matches, loadingMatches, minMatchScore, coverage, statusError, assignments, users,
-    historyOpen, showHistory, closeJd, changeJdStatus, changeEndDate,
+    historyOpen, showHistory, closeJd, changeJdStatus, changeEndDate, updateJdFields,
     selectJd, startCreate, loadMatches, changeStatus, assign, saveJd, summarize, removeJd, openJdFile,
     setSelectedJd, setCreating,
   };

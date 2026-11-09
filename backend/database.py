@@ -47,6 +47,20 @@ def ensure_schema():
     from backend import models  # noqa: F401  (registers every table on Base.metadata)
     _add_missing_columns()
     with engine.begin() as conn:
+        # Split talent availability from pipeline status. Old Active/Not Active values
+        # were stored in candidates.status; preserve them as availability before normalizing.
+        conn.execute(text("UPDATE candidates SET availability_status = CASE WHEN status = 'Not Active' THEN 'Not Active' ELSE 'Active' END WHERE availability_status IS NULL"))
+        conn.execute(text("UPDATE candidates SET status = 'New' WHERE status IN ('Active', 'Not Active') OR status IS NULL"))
+        conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'New' WHERE status IN ('Pending Review', 'On Hold')"))
+        conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'Interviewed' WHERE status = 'Interview in Progress'"))
+        conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'Rejected' WHERE status = 'Not Shortlisted'"))
+        conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'New' WHERE status NOT IN ('New', 'Shortlisted', 'Interviewed', 'Rejected')"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_position_client_name_normalized ON positions (lower(trim(client_name)))"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_email_norm ON candidates (email_norm)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_phone_norm ON candidates (phone_norm)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_current_company ON candidates (current_company)"))
+        conn.execute(text("UPDATE candidates SET email_norm = lower(trim(email)) WHERE email_norm IS NULL AND email IS NOT NULL"))
+        conn.execute(text("UPDATE candidates SET phone_norm = regexp_replace(phone, '[^0-9]', '', 'g') WHERE phone_norm IS NULL AND phone IS NOT NULL"))
         conn.execute(text("UPDATE positions SET status = 'Open' WHERE status IS NULL"))
         conn.execute(text("UPDATE positions SET status = 'Mapped' WHERE status = 'Map'"))
         conn.execute(text("UPDATE positions SET status = 'Cancelled' WHERE status = 'Closed'"))  # Closed no longer exists
@@ -55,11 +69,21 @@ def ensure_schema():
         for table, col in (("requirement_history", "item_display_id"), ("email_records", "position_display_id")):
             conn.execute(text(f"UPDATE {table} SET {col} = 'DM-' || substr({col}, 8) WHERE {col} LIKE 'TRU-JD-%'"))
         conn.execute(text("UPDATE id_sequences SET name = 'DM-' WHERE name = 'TRU-JD-' AND NOT EXISTS (SELECT 1 FROM id_sequences WHERE name = 'DM-')"))
-    from backend.models import Candidate, Position, CANDIDATE_ID_PREFIX, POSITION_ID_PREFIX, seed_id_sequence
+    from backend.models import Candidate, Position, CANDIDATE_ID_PREFIX, POSITION_ID_PREFIX, seed_id_sequence, get_next_candidate_display_id
     db = SessionLocal()
     try:
         seed_id_sequence(db, Position, POSITION_ID_PREFIX)
         seed_id_sequence(db, Candidate, CANDIDATE_ID_PREFIX)
+        # Older candidate rows predate human-readable IDs. Backfill once, preserving all
+        # existing IDs and advancing the counter before assigning any missing values.
+        import re
+        for candidate in db.query(Candidate).order_by(Candidate.uploaded_at, Candidate.id).all():
+            if candidate.display_id and re.fullmatch(r"TRU-CN-\d{4,}", candidate.display_id):
+                continue
+            # Legacy/temporary identifiers (as well as NULL) are not a stable public ID.
+            candidate.display_id = None
+            db.flush()
+            candidate.display_id = get_next_candidate_display_id(db)
         db.commit()
     finally:
         db.close()

@@ -5,6 +5,7 @@ import {
   FileText,
   RefreshCw,
   History,
+  Square,
 } from 'lucide-react';
 import { ingestionApi } from '../lib/api';
 import { fromState, HISTORY_QUERY_KEY } from '../lib/navigation';
@@ -41,6 +42,7 @@ const FILE_STATUS = {
   indexed: { pct: 1 },
   updated: { pct: 1 },
   duplicate: { pct: 1 },
+  skipped: { pct: 1 },
   failed: { pct: 1 },
 };
 const STAGES = [
@@ -78,6 +80,7 @@ export default function IngestionPage() {
   const [dragActive, setDragActive] = useState(false);
   const [resumesVersion, setResumesVersion] = useState(0);
   const [duplicates, setDuplicates] = useState(null);
+  const [stopping, setStopping] = useState(false);
 
   const fileInputRef = useRef(null);
 
@@ -93,7 +96,7 @@ export default function IngestionPage() {
         const res = await ingestionApi.getBatch(activeUploadId);
         if (cancelled) return;
         setUploadProgress(res.data);
-        if (res.data.status === 'completed' || res.data.status === 'failed') {
+        if (['completed', 'failed', 'cancelled'].includes(res.data.status)) {
           setActiveUploadId(null);
           setResumesVersion((v) => v + 1);
         }
@@ -158,6 +161,20 @@ export default function IngestionPage() {
       return;
     }
     await upload({});
+  };
+
+  // Cooperative stop: the backend finishes the file it is on, then skips the rest.
+  const handleStop = async () => {
+    if (!activeUploadId || stopping) return;
+    setStopping(true);
+    try {
+      await ingestionApi.cancelBatch(activeUploadId);
+      setUploadMessage({ type: 'info', text: 'Stopping… the current file will finish, remaining files will be skipped.' });
+    } catch (err) {
+      setUploadMessage({ type: 'error', text: err.response?.data?.detail || 'Could not stop the upload.' });
+    } finally {
+      setStopping(false);
+    }
   };
 
   const confirmDuplicates = async (actions) => {
@@ -311,8 +328,8 @@ export default function IngestionPage() {
                 padding: '0.75rem 1rem',
                 borderRadius: '6px',
                 fontSize: '0.8125rem',
-                backgroundColor: uploadMessage.type === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)',
-                color: uploadMessage.type === 'success' ? 'var(--success-text)' : 'var(--danger-text)'
+                backgroundColor: uploadMessage.type === 'success' ? 'var(--success-bg)' : uploadMessage.type === 'info' ? 'var(--primary-light)' : 'var(--danger-bg)',
+                color: uploadMessage.type === 'success' ? 'var(--success-text)' : uploadMessage.type === 'info' ? 'var(--primary)' : 'var(--danger-text)'
               }}>
                 {uploadMessage.text}
               </div>
@@ -326,8 +343,13 @@ export default function IngestionPage() {
             <div className="ingest-panel-head">
               <h3 className="ingest-panel-title">Upload Progress</h3>
               {activeUploadId && uploadProgress?.status === 'processing' && (
-                <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <RefreshCw size={12} /> Processing
+                <span className="cluster cluster-tight">
+                  <button type="button" className="btn btn-secondary btn-compact" onClick={handleStop} disabled={stopping}>
+                    <Square size={12} /> {stopping ? 'Stopping…' : 'Stop'}
+                  </button>
+                  <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <RefreshCw size={12} /> Processing
+                  </span>
                 </span>
               )}
             </div>
@@ -335,7 +357,7 @@ export default function IngestionPage() {
             {uploadProgress ? ((() => {
               const sum = summarize(uploadProgress);
               const stageIdx = uploadProgress.stage === 'done' ? STAGES.length - 1 : Math.max(0, STAGES.findIndex(st => st.key === uploadProgress.stage));
-              const finished = uploadProgress.status === 'completed' || uploadProgress.status === 'failed';
+              const finished = ['completed', 'failed', 'cancelled'].includes(uploadProgress.status);
               return (
               <div style={{
                 padding: '1.25rem',
@@ -347,7 +369,8 @@ export default function IngestionPage() {
                   <span style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-main)' }}>{sum.pct}%</span>
                   <span className={`badge ${
                     uploadProgress.status === 'completed' ? 'badge-success' :
-                    uploadProgress.status === 'processing' ? 'badge-warning' : 'badge-danger'
+                    uploadProgress.status === 'processing' ? 'badge-warning' :
+                    uploadProgress.status === 'cancelled' ? 'badge-neutral' : 'badge-danger'
                   }`}>
                     {uploadProgress.status}
                   </span>

@@ -3,6 +3,7 @@ import { Download, FileSpreadsheet } from 'lucide-react';
 import useSearch from '../hooks/useSearch';
 import SearchForm from '../components/search/SearchForm';
 import ResultsPanel from '../components/search/ResultsPanel';
+import CandidateLookup from '../components/search/CandidateLookup';
 import Notice from '../components/ui/Notice';
 import { COPY } from '../config/copy';
 import ResumePreviewModal from '../components/ResumePreviewModal';
@@ -29,6 +30,7 @@ export default function SearchPage() {
       </header>
 
       <SearchForm s={s} />
+      <CandidateLookup s={s} />
       {s.notice && <div className="page-notice"><Notice type={s.notice === COPY.nothingToSearch ? 'warning' : 'info'}>{s.notice}</Notice></div>}
       <ResultsPanel s={s} onPreview={setPreview} />
       <ResumePreviewModal isOpen={!!preview} onClose={() => setPreview(null)} candidate={preview} />

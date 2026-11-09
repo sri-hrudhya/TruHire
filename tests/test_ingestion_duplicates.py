@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from backend.database import SessionLocal
 from backend.main import app
-from backend.models import Candidate, IngestionBatch, User
+from backend.models import Candidate, CandidateActivity, CandidateAssignment, CandidateComment, CandidateMatch, IngestionBatch, RequirementCandidateStatus, User
 from backend.routers import ingestion as ing
 
 
@@ -19,7 +19,25 @@ def auth():
     db = SessionLocal()
     user_id = db.query(User).filter(User.email == email).first().id
     db.close()
-    return {"client": client, "headers": {"Authorization": f"Bearer {token}"}, "user_id": user_id, "tag": tag}
+    auth = {"client": client, "headers": {"Authorization": f"Bearer {token}"}, "user_id": user_id, "tag": tag}
+    yield auth
+    # This module creates uploads and a legacy-style X-* candidate explicitly. Keep
+    # those rows scoped to the fixture so later tests see only their own candidates.
+    db = SessionLocal()
+    try:
+        candidate_ids = [row[0] for row in db.query(Candidate.id).filter(Candidate.uploaded_by == user_id).all()]
+        if candidate_ids:
+            db.query(CandidateActivity).filter(CandidateActivity.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+            db.query(CandidateMatch).filter(CandidateMatch.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+            db.query(CandidateAssignment).filter(CandidateAssignment.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+            db.query(CandidateComment).filter(CandidateComment.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+            db.query(RequirementCandidateStatus).filter(RequirementCandidateStatus.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+            db.query(Candidate).filter(Candidate.id.in_(candidate_ids)).delete(synchronize_session=False)
+        db.query(IngestionBatch).filter(IngestionBatch.created_by == user_id).delete(synchronize_session=False)
+        db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
 
 
 def _stub_pipeline(monkeypatch, name="Cand"):

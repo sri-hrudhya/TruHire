@@ -61,6 +61,16 @@ docker compose up --build -d
 Open http://localhost:3999 in your browser.
 For complete Docker details and troubleshooting, see [DOCKER.md](DOCKER.md).
 
+### API capacity settings
+
+The API is stateless and can run with multiple Uvicorn workers or replicas. Tune `UVICORN_WORKERS`,
+`DB_POOL_SIZE`, and `DB_MAX_OVERFLOW` against the PostgreSQL connection budget: total possible API
+connections are approximately `replicas × workers × (pool size + max overflow)`, plus worker and
+maintenance connections. Keep Redis rate-limit counters shared across API replicas. Set
+`CACHE_REDIS_URL` and `QUEUE_REDIS_URL` to separate production Redis services when queue isolation
+is required; local Compose defaults use one Redis service with separate logical databases. Load-test
+at the expected request mix before selecting production values.
+
 ---
 
 ## Local Development (Without Docker)
@@ -134,6 +144,20 @@ candidates (runs in the background, returns 202):
 POST /api/ingest/reindex                     # everything
 POST /api/ingest/reindex?missing_only=true   # only resumes missing from the indexes
 ```
+
+### Retrieval evaluation
+
+Keep human-reviewed relevance judgments in an access-controlled JSONL file outside Git. Each
+row contains a query and candidate IDs graded 0–3; never add resume text or candidate contact
+data. Start from `eval/relevance.example.jsonl`, then run against the configured database and
+Qdrant/OpenSearch services:
+
+```powershell
+python -m backend.evaluation.cli C:\\protected-data\\truhire-judgments.jsonl
+```
+
+The report includes query/category/aggregate nDCG, recall, MRR, precision, and latency. The
+example data is illustrative only and is not a quality benchmark.
 
 #### Location & role filters — migration and reindexing
 

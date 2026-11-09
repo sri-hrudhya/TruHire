@@ -20,6 +20,7 @@ _FILTER_PROPERTIES = {
     "location": {"type": "text"},
     "location_keys": {"type": "keyword"},
     "job_titles": {"type": "text"},
+    "current_company": {"type": "text"},
     "role_tokens": {"type": "keyword"},
 }
 _mapping_synced = False
@@ -103,6 +104,7 @@ def _candidate_doc(candidate_id: str, metadata: Dict[str, Any]) -> Dict[str, Any
         "location": metadata.get("location", ""),
         "location_keys": metadata.get("location_keys", []),
         "job_titles": metadata.get("job_titles", []),
+        "current_company": metadata.get("current_company", ""),
         "role_tokens": metadata.get("role_tokens", []),
     }
 

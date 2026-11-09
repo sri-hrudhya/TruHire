@@ -258,6 +258,14 @@ def heuristic_parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
     Fast regex and keyword extraction of resume fields.
     """
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    current_company = ""
+    for line in lines:
+        match = re.search(r"\b(?:current\s+(?:company|employer)|currently\s+(?:working|employed)\s+(?:at|with))\s*[:\-]?\s*(.{2,100})$", line, re.I)
+        if match:
+            value = re.split(r"\s+[|•·]\s+", match.group(1), maxsplit=1)[0].strip(" ,;.-")
+            if value and not re.search(r"https?://|@|\b(?:ignore|instruction|shortlist)\b", value, re.I):
+                current_company = value[:100]
+                break
     
     # 1. Candidate Name
     candidate_name = ""
@@ -340,6 +348,7 @@ def heuristic_parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
         "education": education,
         "location": heuristic_location(lines),
         "job_titles": heuristic_job_titles(lines),
+        "current_company": current_company,
         "raw_text": raw_text
     }
 
@@ -378,5 +387,8 @@ def parse_resume(raw_text: str, filename: str) -> Dict[str, Any]:
         "education": llm_result["education"] if llm_result["education"] != "Not Specified" else baseline["education"],
         "location": llm_result.get("location") or baseline["location"],
         "job_titles": llm_result.get("job_titles") or baseline["job_titles"],
+        "current_company": (llm_result.get("current_company")
+                            if llm_result.get("current_company") and llm_result["current_company"].casefold() in raw_text.casefold()
+                            else baseline.get("current_company", "")),
         "raw_text": raw_text,
     }

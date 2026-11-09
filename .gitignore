@@ -34,6 +34,8 @@ logs/
 # ---- Local evaluation datasets (keep only the *.example.json template) ----
 eval/*.json
 !eval/*.example.json
+eval/*.jsonl
+!eval/*.example.jsonl
 
 # ---- Editor / OS ----
 .vscode/

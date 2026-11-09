@@ -10,7 +10,7 @@ from backend.auth import get_current_user, require_role
 from backend.config import settings
 from backend.database import get_db
 from backend.models import (
-    ROLE_ADMIN, Candidate, CandidateAssignment, CandidateComment, Position, User,
+    ROLE_ADMIN, Candidate, CandidateActivity, CandidateAssignment, CandidateComment, Position, User,
 )
 
 router = APIRouter(prefix="/api", tags=["reviews"])
@@ -81,6 +81,13 @@ def assign_candidate(pid: str, cid: str, req: AssignmentRequest, db: Session = D
     row.assignee_id = req.assignee_id
     row.assigned_by = user.id
     row.created_at = datetime.utcnow()
+    position = db.get(Position, pid)
+    assignee = db.get(User, req.assignee_id)
+    db.add(CandidateActivity(candidate_id=cid, event_type="assigned", actor_id=user.id, actor_name=user.name,
+                             occurred_at=row.created_at, position_id=pid,
+                             position_title=position.title if position else None,
+                             client_name=position.client_name if position else None,
+                             summary=f"Assigned to {assignee.name if assignee else 'a recruiter'} for review."))
     db.commit()
     return _assignment_dict(row, db)
 
@@ -139,6 +146,12 @@ def add_comment(cid: str, req: CommentRequest, db: Session = Depends(get_db), us
     row = CandidateComment(candidate_id=cid, position_id=req.position_id, author_id=user.id,
                            body=req.body, rating=req.rating)
     db.add(row)
+    position = db.get(Position, req.position_id) if req.position_id else None
+    db.add(CandidateActivity(candidate_id=cid, event_type="comment_added", actor_id=user.id,
+                             actor_name=user.name, occurred_at=datetime.utcnow(), position_id=req.position_id,
+                             position_title=position.title if position else None,
+                             client_name=position.client_name if position else None,
+                             summary="Recruiter added a review comment."))
     db.commit()
     db.refresh(row)
     return _comment_dict(row, user)

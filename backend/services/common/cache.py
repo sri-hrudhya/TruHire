@@ -2,6 +2,7 @@ import logging
 import json
 import pickle
 import time
+from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 import redis
 
@@ -12,7 +13,8 @@ logger = logging.getLogger(__name__)
 _redis_client: Optional[redis.Redis] = None
 _redis_retry_at = 0.0
 _REDIS_RETRY_SECONDS = 30
-_in_memory_store: Dict[str, Tuple[Any, float]] = {}
+_in_memory_store: "OrderedDict[str, Tuple[Any, float]]" = OrderedDict()
+_MAX_MEMORY_ENTRIES = 5000
 
 
 def get_redis_client() -> Optional[redis.Redis]:
@@ -27,12 +29,12 @@ def get_redis_client() -> Optional[redis.Redis]:
         return None
 
     _redis_retry_at = time.time() + _REDIS_RETRY_SECONDS
-    redis_url = settings.effective_redis_url
+    redis_url = settings.effective_cache_redis_url
     if not redis_url:
         return None
 
     try:
-        if settings.REDIS_PASSWORD and settings.REDIS_HOST:
+        if settings.REDIS_PASSWORD and settings.REDIS_HOST and not settings.CACHE_REDIS_URL:
             client = redis.Redis(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
@@ -97,6 +99,7 @@ def get_cache(key: str) -> Optional[Any]:
     if time.time() > expires_at:
         del _in_memory_store[key]
         return None
+    _in_memory_store.move_to_end(key)
     return val
 
 
@@ -112,7 +115,15 @@ def set_cache(key: str, val: Any, ttl_seconds: int = 3600):
             logger.warning(f"[cache] Redis set failed for key {key}: {exc}")
 
     # In-memory store fallback
-    _in_memory_store[key] = (val, time.time() + ttl_seconds)
+    now = time.time()
+    # Expire stale entries before eviction, then enforce a hard process-local bound.
+    for stale_key, (_, expiry) in list(_in_memory_store.items()):
+        if expiry <= now:
+            _in_memory_store.pop(stale_key, None)
+    _in_memory_store[key] = (val, now + max(1, ttl_seconds))
+    _in_memory_store.move_to_end(key)
+    while len(_in_memory_store) > _MAX_MEMORY_ENTRIES:
+        _in_memory_store.popitem(last=False)
 
 
 def delete_cache(key: str):

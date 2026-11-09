@@ -11,7 +11,7 @@ from backend.auth import get_current_user
 from backend.config import settings
 from backend.database import get_db
 from backend.models import (
-    Candidate, CandidateMatch, EmailRecord, Position, User,
+    Candidate, CandidateActivity, CandidateMatch, EmailRecord, Position, User,
     EMAIL_STATUS_FAILED, EMAIL_STATUS_SENT, EMAIL_STATUS_SIMULATED,
 )
 from backend.routers.job_descriptions import get_jd, requirement_statuses
@@ -69,7 +69,7 @@ def _serialize_record(r: EmailRecord) -> dict:
     }
 
 
-EMAILABLE_STATUSES = ("Shortlisted", "Not Shortlisted")
+EMAILABLE_STATUSES = ("Shortlisted", "Rejected")
 
 
 def _match_scores(db: Session, position_id: str, candidate_ids: List[str]) -> dict:
@@ -84,7 +84,7 @@ def _match_scores(db: Session, position_id: str, candidate_ids: List[str]) -> di
 
 def _shortlisted_candidates(db: Session, position_id: str, candidate_ids: List[str]):
     """Returns ({id: Candidate} for emailable ids, [rejection dicts] for the rest). Emailable means the
-    recruiter has made a decision: Shortlisted (invitation) or Not Shortlisted (polite regret)."""
+    recruiter has made a decision: Shortlisted (invitation) or Rejected (polite regret)."""
     ids = list(dict.fromkeys(candidate_ids))
     found = {c.id: c for c in db.query(Candidate).filter(Candidate.id.in_(ids)).all()}
     statuses = requirement_statuses(db, position_id, ids)
@@ -94,7 +94,7 @@ def _shortlisted_candidates(db: Session, position_id: str, candidate_ids: List[s
         if cand is None:
             rejected.append({"candidate_id": cid, "reason": "Candidate not found."})
         elif statuses.get(cid) not in EMAILABLE_STATUSES:
-            rejected.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": "Set the candidate to Shortlisted or Not Shortlisted for this requirement before emailing."})
+            rejected.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": "Set the candidate to Shortlisted or Rejected for this requirement before emailing."})
         elif not (cand.email or "").strip():
             rejected.append({"candidate_id": cid, "candidate_name": cand.candidate_name, "reason": "Candidate has no email address."})
         else:
@@ -213,6 +213,10 @@ def send_emails(req: EmailSendRequest, db: Session = Depends(get_db), user: User
             continue
 
         record.status, record.delivery_mode, record.error = deliver_email(record.recipient_email, subject, body)
+        db.add(CandidateActivity(candidate_id=cand.id, event_type="email_outcome", actor_id=user.id,
+                                 actor_name=user.name, occurred_at=datetime.utcnow(), position_id=pos.id,
+                                 position_title=pos.title, client_name=pos.client_name,
+                                 summary=f"Recruiter email {record.status} for {pos.display_id or pos.title}."))
         db.commit()
         results.append({**_serialize_record(record), "duplicate": False})
 

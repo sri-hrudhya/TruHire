@@ -60,6 +60,7 @@ export const ingestionApi = {
     return api.post('/ingest/check-duplicates', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
   getBatch: (id) => api.get(`/ingest/batches/${id}`),
+  cancelBatch: (id) => api.post(`/ingest/batches/${id}/cancel`),
   // history is polled / manually refreshed: always bypass the client cache (the server caches for 10s)
   history: (params = {}) => api.get('/ingest/history', { params, headers: { 'X-Cache-Bypass': '1' } }),
 };
@@ -129,12 +130,16 @@ export const candidatesApi = {
   list: (params = {}, bypass = false) => api.get('/candidates', { params, headers: bypass ? { 'X-Cache-Bypass': '1' } : {} }),
   setNoticePeriod: (id, value, unit) => api.patch(`/candidates/${id}/notice-period`, { value, unit }),
   updateStatus: (id, status) => api.patch(`/candidates/${id}/status`, { status }),
+  updateAvailability: (id, status) => api.patch(`/candidates/${id}/availability`, { status }),
+  updateRequirementStatus: (positionId, candidateId, status) => api.put(`/job-descriptions/${positionId}/candidates/${candidateId}/status`, { status }),
   getMatches: (id) => api.get(`/candidates/${id}/matches`),
+  getHistory: (id, params = {}) => api.get(`/candidates/${id}/history`, { params }),
   getResumeFile: (id) => api.get(`/candidates/${id}/resume`, { responseType: 'blob' }),
 };
 
 export const searchApi = {
   search: (payload) => api.post('/search', payload, { timeout: TIMEOUTS_MS.search }),
+  clients: () => api.get('/search/clients'),
 };
 
 export const assistantApi = {

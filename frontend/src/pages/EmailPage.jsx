@@ -87,7 +87,7 @@ function SendEmailsSection({ onSent }) {
         <Mail size={18} color="var(--primary)" /> Send Emails
       </h2>
       <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', margin: '0.25rem 0 1rem' }}>
-        Choose a requirement, mark candidates Shortlisted or Not Shortlisted, select them, and review AI-personalized drafts before sending.
+        Choose a requirement, mark candidates Shortlisted or Rejected, select them, and review AI-personalized drafts before sending.
       </p>
 
       <label className="input-label" htmlFor="email-jd">Requirement</label>
@@ -127,7 +127,7 @@ function SendEmailsSection({ onSent }) {
               <RecipientSelector candidates={candidates} selectedIds={selectedIds} onChange={setSelectedIds} onStatusChange={changeStatus} />
               {!candidates.some((c) => EMAILABLE_STATUSES.includes(c.requirement_status)) && (
                 <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-                  Set a candidate's status to Shortlisted (invitation email) or Not Shortlisted (polite regret email) in the Status column to select them.
+                  Set a candidate's requirement status to Shortlisted (invitation email) or Rejected (polite regret email) in the Status column to select them.
                 </p>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
