@@ -113,7 +113,7 @@ def test_requirement_shows_only_candidates_at_or_above_50(ctx):
     assert scores == [85.0, 50.0]
     assert data["min_match_score"] == 50.0
     assert data["total_matches"] == 2 and data["total_scored"] == 4
-    assert all(m["requirement_status"] == "Pending Review" for m in data["matches"])
+    assert all(m["requirement_status"] == "New" for m in data["matches"])
     assert all(m["candidate"]["display_id"] and m["candidate"]["email"] for m in data["matches"])
 
     # Lower-scoring candidates are hidden, not deleted.
@@ -148,19 +148,19 @@ def test_statuses_are_specific_to_each_requirement(ctx):
     jd1, jd2 = ctx["make_jd"]("Role A"), ctx["make_jd"]("Role B")
     top = ctx["cands"][0]
     _shortlist(ctx, jd1["id"], top)
-    _shortlist(ctx, jd2["id"], top, "Not Shortlisted")
+    _shortlist(ctx, jd2["id"], top, "Rejected")
 
     def status(jd_id):
         ms = ctx["client"].get(f"/api/job-descriptions/{jd_id}/matches", headers=ctx["headers"]).json()["matches"]
         return {m["candidate"]["id"]: m["requirement_status"] for m in ms}[top]
 
     assert status(jd1["id"]) == "Shortlisted"
-    assert status(jd2["id"]) == "Not Shortlisted"
+    assert status(jd2["id"]) == "Rejected"
     # Served from the scoring cache, yet the status update is still reflected.
-    _shortlist(ctx, jd1["id"], top, "Pending Review")
-    assert status(jd1["id"]) == "Pending Review"
+    _shortlist(ctx, jd1["id"], top, "New")
+    assert status(jd1["id"]) == "New"
 
-    bad = ctx["client"].put(f"/api/job-descriptions/{jd1['id']}/candidates/{top}/status", json={"status": "Interviewed"}, headers=ctx["headers"])
+    bad = ctx["client"].put(f"/api/job-descriptions/{jd1['id']}/candidates/{top}/status", json={"status": "Not A Status"}, headers=ctx["headers"])
     assert bad.status_code == 400
 
 
@@ -262,7 +262,7 @@ def test_send_history_duplicates_and_simulation(ctx):
     # Not-shortlisted candidates are never emailed.
     rejected = client.post("/api/email/send", headers=headers, json={"position_id": jd["id"], "emails": [
         {"candidate_id": ctx["cands"][2], "subject": "x", "body": "y"}]}).json()
-    assert rejected["results"] == [] and "Set the candidate to Shortlisted or Not Shortlisted" in rejected["skipped"][0]["reason"]
+    assert rejected["results"] == [] and "Set the candidate to Shortlisted or Rejected" in rejected["skipped"][0]["reason"]
 
     roles = {r["position_id"]: r for r in client.get("/api/email/history", headers=headers).json()["roles"]}
     role = roles[jd["id"]]

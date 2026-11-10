@@ -30,7 +30,7 @@ export default function SearchPage() {
       </header>
 
       <SearchForm s={s} />
-      <CandidateLookup s={s} />
+      <CandidateLookup matches={s.candidateMatches} />
       {s.notice && <div className="page-notice"><Notice type={s.notice === COPY.nothingToSearch ? 'warning' : 'info'}>{s.notice}</Notice></div>}
       <ResultsPanel s={s} onPreview={setPreview} />
       <ResumePreviewModal isOpen={!!preview} onClose={() => setPreview(null)} candidate={preview} />

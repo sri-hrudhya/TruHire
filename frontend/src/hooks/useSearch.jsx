@@ -22,10 +22,7 @@ export default function useSearch() {
   const [role, setRole] = useState('');
   const [clientName, setClientName] = useState('');
   const [clientNames, setClientNames] = useState([]);
-  const [candidateLookup, setCandidateLookup] = useState('');
-  const [candidateLookupResults, setCandidateLookupResults] = useState([]);
-  const [candidateLookupLoading, setCandidateLookupLoading] = useState(false);
-  const [candidateLookupError, setCandidateLookupError] = useState('');
+  const [candidateMatches, setCandidateMatches] = useState([]);   // people whose name, email, phone or company is near the search text
   const [jdFilterInfo, setJdFilterInfo] = useState(null);
   const [positions, setPositions] = useState('');    // narrows the requirement choices to demands with this many positions
   const [topN, setTopN] = useState(null);
@@ -67,6 +64,7 @@ export default function useSearch() {
     const client = (over.clientName ?? clientName).trim();
     const decision = searchDecision({ categoryId: category, jdId: jd, query, hasSkills: skills.length > 0, hasOtherFilters: locs.length > 0 || !!rol || !!client });
     setNotice(null);
+    findNearCandidates(query);
     if (decision.action !== 'run') {
       setResults(null);
       setNotice(COPY.nothingToSearch);
@@ -138,7 +136,7 @@ export default function useSearch() {
   const reset = () => {
     rememberCategory('');
     setQuery(''); setPositions(''); setLocations([]); setRole(''); setClientName(''); setJdFilterInfo(null); setChips([]); setMinExp(''); setJdId('');
-    setResults(null); setNotice(null);
+    setResults(null); setNotice(null); setCandidateMatches([]);
   };
 
   const setCandidateStatus = async (candidateId, status) => {
@@ -158,31 +156,19 @@ export default function useSearch() {
     try { await exportApi.downloadCandidates(format, jdId || null); } catch { setNotice('Export failed. Check that you are signed in and try again.'); } finally { setExporting(null); }
   };
 
-  const lookupCandidates = async (event) => {
-    event?.preventDefault();
-    const needle = candidateLookup.trim();
-    if (needle.length < 2) {
-      setCandidateLookupResults([]);
-      setCandidateLookupError('Enter at least two characters to search candidate name, contact, email, or current company.');
-      return;
-    }
-    setCandidateLookupLoading(true);
-    setCandidateLookupError('');
+  // The one search box also finds people: a short text (a name, email, phone number or company) lists the near matches.
+  const findNearCandidates = async (text) => {
+    const needle = text.trim();
+    if (needle.length < 2 || needle.split(/\s+/).length > 4) { setCandidateMatches([]); return; }
     try {
-      const response = await candidatesApi.list({ q: needle, limit: 20 });
-      setCandidateLookupResults(response.data.candidates || []);
-      if (!response.data.candidates?.length) setCandidateLookupError('No close candidate matches found. Try a shorter name, email, phone number, or company.');
-    } catch (error) {
-      setCandidateLookupResults([]);
-      setCandidateLookupError(error?.response?.data?.detail || 'Candidate lookup failed. Try again.');
-    } finally {
-      setCandidateLookupLoading(false);
-    }
+      const response = await candidatesApi.list({ q: needle, limit: 10 });
+      setCandidateMatches(response.data.candidates || []);
+    } catch { setCandidateMatches([]); }
   };
 
   return {
     query, setQuery, positions, setPositions, chips, minExp, setMinExp, jdId, categoryId, locations, setLocations, role, setRole, clientName, setClientName, clientNames, jdFilterInfo,
-    candidateLookup, setCandidateLookup, candidateLookupResults, candidateLookupLoading, candidateLookupError, lookupCandidates,
+    candidateMatches,
     topN: effectiveTopN, setTopN, jds, demands, results, loading, notice, exporting,
     run, selectJd, selectCategory, removeChip, clearRoleLocation, reset, setCandidateStatus, exportCandidates,
   };

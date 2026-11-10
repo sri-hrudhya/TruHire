@@ -91,7 +91,6 @@ export const demandApi = {
   list: () => api.get('/demands'),
   // The five categories are fixed (Java, GenAI, Camunda, Pega, Others): read-only from the client.
   get: (id) => api.get(`/demands/${id}`),
-  listJds: (id) => api.get(`/demands/${id}/job-descriptions`),
 };
 
 // Shared by the Requirements page and the Email page so both write to the same history.
@@ -137,6 +136,10 @@ export const candidatesApi = {
   getResumeFile: (id) => api.get(`/candidates/${id}/resume`, { responseType: 'blob' }),
 };
 
+export const trackerApi = {
+  list: (params = {}) => api.get('/tracker', { params }),
+};
+
 export const searchApi = {
   search: (payload) => api.post('/search', payload, { timeout: TIMEOUTS_MS.search }),
   clients: () => api.get('/search/clients'),
@@ -146,6 +149,8 @@ export const assistantApi = {
   listConversations: () => api.get('/assistant/conversations'),
   getConversation: (id) => api.get(`/assistant/conversations/${id}`),
   clearConversations: () => api.delete('/assistant/conversations'),
+  // Approve or cancel a write the agent proposed (update a status, set availability, ...).
+  confirm: (body) => api.post('/assistant/confirm', body, { timeout: TIMEOUTS_MS.jdFilters }),
   // Guided demand creation: the server holds the workflow, each call returns { session, messages }.
   demandSession: {
     start: (conversationId) => api.post('/assistant/demand-sessions', { conversation_id: conversationId || null }),

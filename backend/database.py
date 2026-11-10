@@ -54,7 +54,7 @@ def ensure_schema():
         conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'New' WHERE status IN ('Pending Review', 'On Hold')"))
         conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'Interviewed' WHERE status = 'Interview in Progress'"))
         conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'Rejected' WHERE status = 'Not Shortlisted'"))
-        conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'New' WHERE status NOT IN ('New', 'Shortlisted', 'Interviewed', 'Rejected')"))
+        conn.execute(text("UPDATE requirement_candidate_statuses SET status = 'New' WHERE status NOT IN ('New', 'Mapped', 'Shortlisted', 'Interviewed', 'Rejected')"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_position_client_name_normalized ON positions (lower(trim(client_name)))"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_email_norm ON candidates (email_norm)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_candidates_phone_norm ON candidates (phone_norm)"))

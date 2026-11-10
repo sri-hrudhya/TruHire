@@ -56,3 +56,6 @@ PROJECT_RULES.md
 model_capabilities.yaml
 VERSION
 command.md
+
+# Sample resumes (personal data) are kept locally, not in the repo
+Resumes_*/

@@ -27,7 +27,7 @@ export default function SearchForm({ s }) {
           <Search size={17} aria-hidden="true" />
           <span className="sr-only">Keywords</span>
           <input type="text" value={s.query} onChange={(e) => s.setQuery(e.target.value)}
-            placeholder="Skills, role, demand title or ID, or a sentence such as “Python and Docker, 5+ yrs”" />
+            placeholder="Skills, role, demand title or ID, or a candidate’s name, email, phone or company" />
         </label>
         <button type="submit" className="btn btn-primary" disabled={s.loading}>{s.loading ? 'Searching…' : 'Search'}</button>
       </div>

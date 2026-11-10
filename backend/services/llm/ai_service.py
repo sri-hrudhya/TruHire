@@ -158,32 +158,6 @@ def heuristic_match_summary(candidate_skills: List[str], candidate_exp: float, s
     )
 
 
-def generate_match_summary(candidate_skills: List[str], candidate_exp: float, candidate_edu: str, jd_title: str, jd_text: str, match_score: float) -> Tuple[str, str, str]:
-    safe_jd = redact_pii(jd_text)
-    profile = (
-        f"Candidate skills: {', '.join(s[:60] for s in candidate_skills[:60]) or 'None'}\n"
-        f"Experience: {candidate_exp}\nEducation: {(candidate_edu or '')[:300]}"
-    )
-    prompt = (
-        untrusted("candidate_profile", profile) + f"\nMatch score: {match_score:.1f}%\n\n"
-        + untrusted("job_title", jd_title[:200]) + "\n" + untrusted("job_description", safe_jd[:5000])
-        + "\n\nReturn JSON only with keys summary, cited_quote, cited_section. Keep summary to two sentences "
-        "and cited_quote short and verbatim from the job description."
-    )
-    try:
-        with ai_feature("search_summary"):
-            result = chat_completion([
-                _system("You are a precise recruitment scoring engine. Return valid JSON only."),
-                {"role": "user", "content": prompt}
-            ], temperature=0.1, max_tokens=500, enable_thinking=False)
-        data = _json_from_response(result)
-        if data:
-            return str(data.get("summary", ""))[:1000], str(data.get("cited_quote", ""))[:500], str(data.get("cited_section", "Requirements"))[:100]
-    except Exception as exc:
-        logger.warning(f"vLLM match summary failed: {exc}")
-    return heuristic_match_summary(candidate_skills, candidate_exp, safe_jd, jd_title)
-
-
 def llm_extract_jd_skills(jd_text: str) -> Optional[List[str]]:
     """
     Free-form skill/requirement extraction from a job description via the LLM - not

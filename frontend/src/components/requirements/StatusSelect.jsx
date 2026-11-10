@@ -8,9 +8,10 @@ import { CancelReasonModal, MapResumesModal } from './StatusModals';
 //   value      the status currently shown
 //   reason     the saved cancellation reason (pre-fills the popup)
 //   resumes    the saved resumes, [{ id, display_id, candidate_name }] (pre-selects them)
+//   matches    this demand's ranked matches [{ candidate, match_score }]; when given, Mapped / Fulfilled offers only those
 //   onChange   (status, extras, resumes) => Promise<string | null>; extras is { cancellation_reason } or { candidate_ids };
 //              resolve to an error message to keep the popup open and show it
-export default function StatusSelect({ id, value, reason = '', resumes = [], onChange, className = 'input-field', ariaLabel }) {
+export default function StatusSelect({ id, value, reason = '', resumes = [], matches, onChange, className = 'input-field', ariaLabel }) {
   const { jd_statuses: statuses, resume_linked_jd_statuses: linked } = useMeta();
   const [asking, setAsking] = useState(null);  // the status whose popup is open
 
@@ -31,7 +32,7 @@ export default function StatusSelect({ id, value, reason = '', resumes = [], onC
           onConfirm={(text) => onChange(CANCELLED, { cancellation_reason: text }, [])} />
       )}
       {asking && asking !== CANCELLED && (
-        <MapResumesModal status={asking} initial={resumes} onClose={() => setAsking(null)}
+        <MapResumesModal status={asking} initial={resumes} matches={matches} onClose={() => setAsking(null)}
           onConfirm={(ids, picked) => onChange(asking, { candidate_ids: ids }, picked)} />
       )}
     </>

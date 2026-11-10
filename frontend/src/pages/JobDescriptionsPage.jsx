@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Building2, ChevronRight, History, LayoutGrid, Layers, List } from 'lucide-react';
+import { Building2, ChevronRight, ClipboardList, FileText, History, LayoutGrid, Layers, List, Users } from 'lucide-react';
 import useRequirements from '../hooks/useRequirements';
 import Notice from '../components/ui/Notice';
 import ResumePreviewModal from '../components/ResumePreviewModal';
@@ -7,6 +7,7 @@ import DemandCards from '../components/requirements/DemandCards';
 import ClientCards from '../components/requirements/ClientCards';
 import JdCards from '../components/requirements/JdCards';
 import JdDetails from '../components/requirements/JdDetails';
+import RequirementTracker from '../components/requirements/RequirementTracker';
 import JdStatusBadge from '../components/requirements/JdStatusBadge';
 import JdTable from '../components/requirements/JdTable';
 import RequirementHistory from '../components/requirements/RequirementHistory';
@@ -16,7 +17,12 @@ import { DeleteRequirementModal, EmailShortlistModal } from '../components/requi
 import { UNASSIGNED_CLIENT, inClient, sortByStatus } from '../lib/requirements';
 import '../components/requirements/requirements.css';
 
-const TABS = (count) => [['details', 'Details'], ['matches', `Candidates (${count})`]];
+// id, label, icon, what the tab shows
+const TABS = (count) => [
+  ['details', 'Demand details', FileText, 'Fields, status and the full job description'],
+  ['matches', 'Best-match candidates', Users, 'Candidates ranked against this demand', count],
+  ['tracker', 'Submission tracker', ClipboardList, 'Candidates submitted to this demand, with their details'],
+];
 
 // Progressive disclosure: five folder cards -> that folder's demand cards -> one demand's full details.
 export default function JobDescriptionsPage() {
@@ -119,20 +125,25 @@ export default function JobDescriptionsPage() {
         ) : jd ? (
           <>
             <div className="section-head">
-              <h2>{jd.title}</h2>
+              <h2>{jd.client_name ? `${jd.title} - ${jd.client_name}` : jd.title}</h2>
               <span className="cluster cluster-tight slug">
                 {jd.display_id} <JdStatusBadge status={jd.status} />
               </span>
             </div>
-            <div className="category-row" role="tablist" aria-label="Requirement sections">
-              {TABS(r.matches.length).map(([id, label]) => (
-                <button key={id} type="button" role="tab" className="category-tab" aria-selected={tab === id} onClick={() => { setTab(id); setEditing(false); }}>{label}</button>
+            <div className="req-tabs" role="tablist" aria-label="Demand sections">
+              {TABS(r.matches.length).map(([id, label, Icon, hint, count]) => (
+                <button key={id} type="button" role="tab" className="req-tab" title={hint} aria-selected={tab === id} onClick={() => { setTab(id); setEditing(false); }}>
+                  <Icon size={16} aria-hidden="true" />
+                  <span>{label}</span>
+                  {count !== undefined && <span className="req-tab-count">{count}</span>}
+                </button>
               ))}
             </div>
             {tab === 'details' && !editing && (
               <JdDetails
                 jd={jd}
                 demandName={r.demands.find((d) => d.id === jd.demand_id)?.name}
+                matches={r.matches}
                 onStatus={r.changeJdStatus}
                 onEdit={() => setEditing(true)}
                 onDuplicate={() => duplicate(jd)}
@@ -140,8 +151,9 @@ export default function JobDescriptionsPage() {
                 onOpenFile={() => r.openJdFile(jd.id)}
               />
             )}
+            {tab === 'tracker' && <RequirementTracker positionId={jd.id} />}
             {tab === 'details' && editing && (
-              <RequirementEditor key={`${jd.id}-${jd.jd_version}`} jd={jd} creating={false} demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} onCancel={() => setEditing(false)} />
+              <RequirementEditor key={`${jd.id}-${jd.jd_version}`} jd={jd} creating={false} matches={r.matches} demands={r.demands} onSave={save} onSummarize={r.summarize} onNotice={r.setNotice} onCancel={() => setEditing(false)} />
             )}
             {tab === 'matches' && (
               <RequirementMatches

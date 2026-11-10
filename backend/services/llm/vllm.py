@@ -541,6 +541,39 @@ def chat_completion(
     return content
 
 
+def chat_with_tools(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    *,
+    temperature: float = 0.1,
+    max_tokens: int = 800,
+    timeout: Optional[httpx.Timeout] = None,
+) -> Dict[str, Any]:
+    """One tool-calling turn on the DGX model: returns the assistant message (``content`` and/or ``tool_calls``)."""
+    model = resolve_chat_model()
+    payload: Dict[str, Any] = {"model": model, "messages": messages, "tools": tools, "temperature": temperature,
+                               "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
+    prompt_text = "\n\n".join(f"[{m.get('role')}] {m.get('content') or ''}" for m in messages)
+    started = time.perf_counter()
+    try:
+        data = _post_chat(f"{_vllm_base_url()}/chat/completions", model, payload, timeout=timeout)
+    except Exception as exc:
+        ai_audit.record(provider="vllm", model=model, status="error", prompt=prompt_text,
+                        latency_ms=(time.perf_counter() - started) * 1000, error=str(exc))
+        raise
+    choices = data.get("choices")
+    if not choices:
+        raise RuntimeError(f"DGX vLLM returned no choices. Response: {data}")
+    message = choices[0].get("message") or {}
+    usage = data.get("usage") or {}
+    calls = message.get("tool_calls") or []
+    ai_audit.record(provider="vllm", model=model, prompt=prompt_text,
+                    output=message.get("content") or ("tool_calls: " + ", ".join((c.get("function") or {}).get("name", "?") for c in calls)),
+                    prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
+                    latency_ms=(time.perf_counter() - started) * 1000, details={"tools": True})
+    return message
+
+
 def _post_chat(endpoint: str, model: str, payload: Dict[str, Any], timeout: Optional[httpx.Timeout] = None) -> Dict[str, Any]:
     """HTTP round trip to the vLLM chat endpoint; returns the decoded JSON body."""
     headers = _headers(

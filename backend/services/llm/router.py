@@ -16,7 +16,8 @@ seconds, then probed again by the next request. When the DGX answers, it is firs
 Text sent to a cloud provider is PII-redacted first (LLM_CLOUD_REDACT_PII).
 Embeddings are not routed here; they use local_embeddings.py.
 
-chat_completion returns the whole reply; chat_completion_stream yields it in pieces as it is written.
+chat_completion returns the whole reply; chat_completion_stream yields it in pieces as it is written;
+chat_with_tools returns one assistant message that may ask for tool calls (used by the assistant agent).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
 
@@ -141,6 +142,48 @@ def chat_completion(
             continue
         _audit_cloud(provider, plan, started, output=result)
         return result
+    raise _all_failed(last_exc) from last_exc
+
+
+def chat_with_tools(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    *,
+    temperature: float = 0.1,
+    max_tokens: int = 800,
+) -> Dict[str, Any]:
+    """One tool-calling turn through the same vLLM -> cloud chain, breaker, key rotation and PII redaction as
+    chat_completion. Returns the OpenAI-style assistant message: ``{"content": str|None, "tool_calls": [...]}``.
+    Raises TransientLLMError when no provider could answer, so the caller can fall back."""
+    deadline = time.monotonic() + settings.LLM_TOTAL_TIMEOUT
+    last_exc: Exception = TransientLLMError("No LLM provider is available.")
+
+    if _vllm_available():
+        try:
+            result = _vllm.chat_with_tools(messages, tools, temperature=temperature, max_tokens=max_tokens, timeout=_vllm_timeout())
+            _vllm_succeeded()
+            return result
+        except TransientLLMError as exc:
+            _vllm_failed()
+            last_exc = exc
+            logger.warning("vLLM unavailable (%s); switching to cloud providers.", str(exc).splitlines()[0])
+    else:
+        logger.info("vLLM skipped (circuit open); using cloud providers.")
+
+    plan = _plan_cloud(messages, last_exc)
+    for provider in plan.providers:
+        started = time.perf_counter()
+        try:
+            message = provider.chat_message(plan.messages, temperature=temperature, max_tokens=max_tokens, deadline=deadline, tools=tools)
+        except RuntimeError as exc:
+            _audit_cloud(provider, plan, started, output=None, error=str(exc)[:500])
+            last_exc = exc
+            if time.monotonic() >= deadline:
+                break
+            continue
+        calls = message.get("tool_calls") or []
+        _audit_cloud(provider, plan, started, output=message.get("content") or ("tool_calls: " + ", ".join((c.get("function") or {}).get("name", "?") for c in calls)))
+        return message
     raise _all_failed(last_exc) from last_exc
 
 

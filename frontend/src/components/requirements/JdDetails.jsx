@@ -47,14 +47,14 @@ function EndDate({ jd, onSave }) {
   );
 }
 
-export default function JdDetails({ jd, demandName, onStatus, onEdit, onDuplicate, onOpenFile, onEndDate }) {
+export default function JdDetails({ jd, demandName, matches, onStatus, onEdit, onDuplicate, onOpenFile, onEndDate }) {
   return (
     <div className="stack stack-loose">
       <div className="detail-toolbar">
         <div className="match-status">
           <span className="input-label jd-status-label">Demand Status</span>
           <StatusSelect className="input-field match-status-select" ariaLabel="Demand status" value={jd.status || 'Open'}
-            reason={jd.cancellation_reason || ''} resumes={jd.mapped_resumes || []}
+            reason={jd.cancellation_reason || ''} resumes={jd.mapped_resumes || []} matches={matches}
             onChange={(status, extras) => onStatus(status, extras)} />
           <StatusNote jd={jd} />
         </div>

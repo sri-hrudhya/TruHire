@@ -2,6 +2,7 @@
 //   hollow = still to decide, filled = shortlisted, struck = not shortlisted.
 export const STATUS_MARKS = Object.freeze({
   New: 'hollow',
+  Mapped: 'filled',
   Shortlisted: 'filled',
   Interviewed: 'filled',
   Rejected: 'struck',

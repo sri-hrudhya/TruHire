@@ -8,7 +8,7 @@ export const FALLBACK_META = Object.freeze({
   resume_linked_jd_statuses: ['Mapped', 'Fulfilled'],
   client_names: ['Cretera', 'Infosys', 'Coforge', 'Aaseya', 'NTT Data', 'Utsuk'],
   notice_period_units: ['Days', 'Weeks', 'Months'],
-  requirement_statuses: ['New', 'Shortlisted', 'Interviewed', 'Rejected'],
+  requirement_statuses: ['New', 'Mapped', 'Shortlisted', 'Interviewed', 'Rejected'],
   default_requirement_status: 'New',
   candidate_statuses: ['New', 'Shortlisted', 'Interviewed', 'Rejected'],
   email_statuses: ['pending', 'sent', 'simulated', 'failed'],

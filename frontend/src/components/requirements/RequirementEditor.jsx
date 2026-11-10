@@ -31,7 +31,7 @@ const initialDetails = (jd, creating, defaultStatus, template, defaultDemandId) 
   };
 };
 
-export default function RequirementEditor({ jd, creating, template = null, defaultDemandId = null, demands = [], onSave, onSummarize, onNotice, onCancel }) {
+export default function RequirementEditor({ jd, creating, matches, template = null, defaultDemandId = null, demands = [], onSave, onSummarize, onNotice, onCancel }) {
   const { accepted_jd_file_types: acceptedTypes, client_names: clientNames, default_jd_status: defaultStatus } = useMeta();
   const [initial] = useState(() => initialDetails(jd, creating, defaultStatus, template, defaultDemandId));
   const [details, setDetails] = useState(initial);
@@ -207,7 +207,7 @@ export default function RequirementEditor({ jd, creating, template = null, defau
         </div>
         <div>
           <label className="input-label" htmlFor="req-status">Demand Status</label>
-          <StatusSelect id="req-status" value={details.status} reason={details.cancellationReason} resumes={pickedResumes}
+          <StatusSelect id="req-status" value={details.status} reason={details.cancellationReason} resumes={pickedResumes} matches={creating ? undefined : matches}
             onChange={async (status, extras, picked) => {
               setDetails((d) => ({ ...d, status, cancellationReason: extras.cancellation_reason ?? '', candidateIds: extras.candidate_ids ?? [] }));
               setPickedResumes(picked);

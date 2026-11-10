@@ -1,19 +1,32 @@
 import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { FileText, MessageSquare } from 'lucide-react';
 import { fromState } from '../../lib/navigation';
 import { useMeta } from '../../context/MetaContext';
 import StatusMark from '../ui/StatusMark';
+import { skillCoverage } from '../../lib/requirements';
 import AssignmentPicker from '../review/AssignmentPicker';
 import CommentThread from '../review/CommentThread';
 import { EmailStatusBadge } from '../EmailComposer';
 import './requirements.css';
 
-const MAX_GAPS_SHOWN = 8;
+// Skills as small chips, capped so a row stays one glance tall.
+function Chips({ label, skills, tone, max = 6 }) {
+  if (!skills.length) return null;
+  return (
+    <span className="match-chips">
+      <strong>{label}</strong>
+      {skills.slice(0, max).map((skill) => <span key={skill} className={`chip chip-${tone}`}>{skill}</span>)}
+      {skills.length > max && <span className="slug">+{skills.length - max} more</span>}
+    </span>
+  );
+}
 
-// One ranked candidate for a requirement: score, who, why it ranked, then the review controls.
+// One ranked candidate for a requirement, kept compact: who, matching / not matching %, what matches and what is
+// missing. Clicking the row opens the full candidate page; the review controls stay on the right.
 export default function MatchRow({ item, positionId, assignment, users, onStatus, onAssign, onPreview }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { requirement_statuses: statuses, default_requirement_status: defaultStatus } = useMeta();
   const [open, setOpen] = useState(false);
   const cand = item.candidate;
@@ -21,35 +34,27 @@ export default function MatchRow({ item, positionId, assignment, users, onStatus
   const tone = score >= 80 ? 'high' : score >= 60 ? 'mid' : 'low';
   const matched = item.score_breakdown?.matched_skills || [];
   const gaps = item.score_breakdown?.missing_skills || [];
+  const coverage = skillCoverage(item.score_breakdown);
   const status = item.requirement_status || defaultStatus;
+  const openCandidate = () => navigate(`/candidates/${cand.id}`, { state: fromState(location, 'Requirements') });
 
   return (
     <li className="match">
-      <div className={`match-score match-score-${tone}`} aria-label={`Match score ${score.toFixed(1)} percent`}>
+      <div className={`match-score match-score-${tone}`} aria-label={`Overall match score ${score.toFixed(1)} percent`} title="Overall score: resume-to-JD similarity (60%) plus required-skill coverage (40%)">
         <span className="match-score-num">{Math.round(score)}</span>
         <span className="match-score-unit">%</span>
       </div>
 
-      <div className="match-body">
+      <div className="match-body match-body-link" onClick={openCandidate}>
         <div className="cluster cluster-tight">
-          <Link className="match-name" to={`/candidates/${cand.id}`} state={fromState(location, 'Requirements')}>{cand.candidate_name}</Link>
-          <span className="slug">{cand.display_id || 'TRU-CN-????'}</span>
+          <Link className="match-name" to={`/candidates/${cand.id}`} state={fromState(location, 'Requirements')} onClick={(e) => e.stopPropagation()}>{cand.candidate_name}</Link>
+          <span className="slug">{cand.display_id || 'TRU-CN-????'} · {cand.years_experience} yrs</span>
           {item.last_email && <EmailStatusBadge status={item.last_email.status} />}
         </div>
-        <p className="slug">
-          {cand.years_experience} yrs · {cand.education || 'Education not stated'}{cand.email ? ` · ${cand.email}` : ''}
-        </p>
-        {item.llm_summary && <p className="dek">{item.llm_summary}</p>}
-        {item.cited_quote && <p className="match-cite">“{item.cited_quote}”</p>}
-        {(matched.length > 0 || gaps.length > 0) && (
-          <p className="match-skills">
-            {matched.length > 0 && <span><strong>Matches</strong> {matched.join(', ')}</span>}
-            {gaps.length > 0 && (
-              <span className="match-gaps"><strong>Gaps</strong> {gaps.slice(0, MAX_GAPS_SHOWN).join(', ')}{gaps.length > MAX_GAPS_SHOWN ? ` +${gaps.length - MAX_GAPS_SHOWN} more` : ''}</span>
-            )}
-          </p>
-        )}
-        {open && <div className="match-thread"><CommentThread candidateId={cand.id} positionId={positionId} /></div>}
+        <p className="match-pct"><strong>Skills matched {coverage.matched} of {coverage.total}{coverage.pct !== null && ` (${coverage.pct}%)`}</strong> · <span>Missing {coverage.missing}{coverage.pct !== null && ` (${100 - coverage.pct}%)`}</span></p>
+        <Chips label="Matches" skills={matched} tone="match" />
+        <Chips label="Missing" skills={gaps} tone="gap" />
+        {open && <div className="match-thread" onClick={(e) => e.stopPropagation()}><CommentThread candidateId={cand.id} positionId={positionId} /></div>}
       </div>
 
       <div className="match-controls">

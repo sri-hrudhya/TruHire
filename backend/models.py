@@ -254,7 +254,7 @@ class AssistantDemandSession(Base):
 
 
 CANDIDATE_STATUSES = ("New", "Shortlisted", "Interviewed", "Rejected")
-REQUIREMENT_STATUSES = CANDIDATE_STATUSES
+REQUIREMENT_STATUSES = ("New", "Mapped", "Shortlisted", "Interviewed", "Rejected")  # per-requirement review stages
 DEFAULT_REQUIREMENT_STATUS = "New"
 
 

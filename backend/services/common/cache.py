@@ -3,7 +3,7 @@ import json
 import pickle
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 import redis
 
 from backend.config import settings

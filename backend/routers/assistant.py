@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import SessionLocal, get_db
-from backend.models import Candidate, CandidateActivity, Conversation, ConversationMessage, Position, User
+from backend.models import INACTIVE_JD_STATUSES, LEGACY_JD_STATUS_ALIASES, Candidate, Conversation, ConversationMessage, Position, User
 from backend.routers import assistant_demand
 from backend.services.candidates.directory import filter_directory
 from backend.services.common.payloads import candidate_payload
@@ -19,6 +19,7 @@ from backend.routers.ingestion import process_batch
 from backend.services.ingestion.doc_kind import detect_document_kind
 from backend.services.ingestion.parsing import YEARS_EXP_PATTERN, extract_text_from_file, is_supported_jd_file
 from backend.services.ingestion.storage import save_upload_file
+from backend.services.llm import agent
 from backend.services.llm.assistant_context import build_data_context
 from backend.services.llm.assistant_prompt import build_system_prompt
 from backend.services.llm.router import chat_completion, chat_completion_stream
@@ -31,7 +32,7 @@ from backend.services.retrieval.client_search import search_client_requirements
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 
-_JD_ID = re.compile(r"\bTRU-JD-\d+\b", re.I)
+_JD_ID = re.compile(r"\bDM-\d+\b", re.I)  # demand IDs were renamed from TRU-JD-nnnn to DM-nnnn
 HISTORY_MESSAGES = 6  # recent turns sent to the model; older ones are not needed to follow the thread
 HISTORY_MESSAGE_CHARS = 1500
 
@@ -118,6 +119,102 @@ def _candidate_lookup_terms(message: str) -> str:
                "of", "for", "please", "can", "you", "near", "matching", "matches", "and", "or"}
     return " ".join(token for token in re.findall(r"[A-Za-z0-9@.+_-]+", message)
                      if token.casefold() not in ignored)
+
+
+_OPEN_POSITIONS_NOUN = re.compile(r"\b(positions?|openings?|vacanc(?:y|ies)|headcount|hires?)\b")
+_OPEN_POSITIONS_CUE = re.compile(r"\b(how\s+many|number|no\.?\s*of|count|total|open|vacant|remaining|available|what)\b")
+_OPEN_POSITIONS_STOP = {
+    "how", "many", "number", "no", "of", "count", "total", "open", "vacant", "remaining", "available", "what", "whats",
+    "is", "are", "the", "a", "an", "for", "in", "on", "there", "tell", "me", "show", "give", "list", "please", "can",
+    "you", "have", "has", "do", "does", "this", "that", "to", "hire", "hires", "position", "positions", "opening",
+    "openings", "vacancy", "vacancies", "headcount", "demand", "demands", "requirement", "requirements", "jd", "jds",
+    "job", "description", "descriptions", "my", "our", "all", "any", "with", "from", "s",
+}
+
+
+def _open_positions_action(db: Session, message: str) -> Optional[tuple]:
+    """Answer "how many open positions does <demand> have?" from each demand's saved number of positions."""
+    lower = (message or "").lower()
+    if len(lower) > 200:
+        return None  # a pasted JD, not a question
+    if not (_OPEN_POSITIONS_NOUN.search(lower) and _OPEN_POSITIONS_CUE.search(lower)):
+        return None
+    if re.search(r"\b(create|add|new|update|change|set|edit|candidates?|resumes?)\b", lower):
+        return None  # a write request or a candidate search, not a count question
+    ids = {m.upper() for m in _JD_ID.findall(message or "")}
+    terms = [t for t in re.findall(r"[a-z0-9]+", _JD_ID.sub(" ", lower)) if t not in _OPEN_POSITIONS_STOP]
+    positions = db.query(Position).order_by(Position.created_at.desc()).all()
+    if ids:
+        matches = [p for p in positions if (p.display_id or "").upper() in ids]
+    else:
+        matches = []
+        for p in positions:
+            indexed = " ".join((p.title or "", p.role or "", p.client_name or "", p.demand.name if p.demand else "")).lower()
+            if all(term in indexed for term in terms):
+                matches.append(p)
+    scope = " ".join(sorted(ids)) or " ".join(terms)
+    if not matches:
+        return f"I couldn't find a saved demand matching “{scope}”.", {"action": "open_positions", "total": 0, "requirements": []}
+
+    def status(p):
+        raw = p.status or "Open"
+        return LEGACY_JD_STATUS_ALIASES.get(raw, raw)
+
+    rows = [{"id": p.id, "display_id": p.display_id, "title": p.title, "client_name": p.client_name,
+             "status": status(p), "no_of_positions": p.no_of_positions} for p in matches]
+    live = [r for r in rows if r["status"] not in INACTIVE_JD_STATUSES]
+    total = sum(r["no_of_positions"] or 0 for r in live)
+
+    def label(r):
+        return f"{r['display_id'] or 'JD'} · {r['title']}" + (f" ({r['client_name']})" if r["client_name"] else "")
+
+    if len(rows) == 1:
+        r = rows[0]
+        if r["no_of_positions"] is None:
+            reply = f"{label(r)} has no number of positions recorded."
+        else:
+            reply = f"{label(r)} has {r['no_of_positions']} open position{'s' if r['no_of_positions'] != 1 else ''}."
+        if r["status"] in INACTIVE_JD_STATUSES:
+            reply += f" Note: this demand is {r['status']}."
+    else:
+        listed = "; ".join(f"{label(r)}: {r['no_of_positions'] if r['no_of_positions'] is not None else 'not recorded'}" for r in live[:10])
+        extra = f" (+{len(live) - 10} more)" if len(live) > 10 else ""
+        reply = (f"{total} open position{'s' if total != 1 else ''} across {len(live)} live demand{'s' if len(live) != 1 else ''}"
+                 + (f" matching “{scope}”" if scope else "") + (f". {listed}{extra}." if listed else "."))
+    return reply, {"action": "open_positions", "total": total, "requirements": rows}
+
+
+_HISTORY_WORDS = re.compile(r"\b(history|timeline|activity|submitted|submissions?)\b")
+_HISTORY_IGNORED = {"history", "activity", "timeline", "status", "statuses", "submitted", "submission", "submissions",
+                    "truhire", "details", "detail", "about", "what", "whats", "tell", "get", "see", "view", "display",
+                    "record", "records", "recorded", "so", "far", "to", "which", "where", "all", "his", "her", "their"}
+
+
+def _candidate_history_action(db: Session, message: str) -> Optional[tuple]:
+    """Show where a candidate was submitted (client - status), then the recorded notes, newest first."""
+    lower = (message or "").lower()
+    display_id = re.search(r"\bTRU-CN-\d+\b", message or "", re.I)
+    about_candidate = bool(display_id or re.search(r"\b(candidate|person|applicant|resume|profile)\b", lower))
+    asks_history = bool(_HISTORY_WORDS.search(lower)) or (about_candidate and re.search(r"\bstatus(?:es)?\b", lower))
+    if not asks_history:
+        return None
+    if not about_candidate and re.search(r"\b(demands?|requirements?|jds?|clients?)\b|dm-\d+", lower):
+        return None  # requirement/demand history is not candidate history
+    if display_id:
+        matches = db.query(Candidate).filter(Candidate.display_id.ilike(display_id.group(0))).all()
+        terms = display_id.group(0)
+    else:
+        terms = " ".join(token for token in _candidate_lookup_terms(message).split() if token.casefold() not in _HISTORY_IGNORED)
+        if len(terms) < 2:
+            return "Whose history should I show? Give the candidate's name, email, phone number, current company or TruHire ID.", {"action": "reply"}
+        matches = filter_directory(db.query(Candidate), terms).limit(5).all()
+    if not matches:
+        return "I couldn't find that candidate. Try a shorter name, email, phone number, current company or the TruHire ID.", {"action": "reply"}
+    if len(matches) > 1:
+        return "More than one candidate fits. Pick the right one to open their history, or give the TruHire ID:", {
+            "action": "candidate_lookup", "query": terms, "results": [candidate_payload(person) for person in matches]}
+    candidate = matches[0]
+    return agent.history_data(db, candidate)
 
 
 def _client_demand_action(db: Session, message: str) -> Optional[tuple]:
@@ -383,13 +480,14 @@ def _generic_reply(db: Session, request: AssistantMessageRequest, conversation: 
 
 @router.get("/conversations")
 def list_conversations(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = db.query(Conversation).filter(Conversation.user_id == user.id).order_by(Conversation.updated_at.desc()).limit(20).all()
+    rows = (db.query(Conversation).filter(Conversation.user_id == user.id, Conversation.title != agent.MEMORY_TITLE)
+            .order_by(Conversation.updated_at.desc()).limit(20).all())
     return {"conversations": [{"id": c.id, "title": c.title, "position_id": c.position_id, "candidate_id": c.candidate_id} for c in rows]}
 
 
 @router.delete("/conversations")
 def clear_conversations(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = db.query(Conversation).filter(Conversation.user_id == user.id).all()
+    rows = db.query(Conversation).filter(Conversation.user_id == user.id, Conversation.title != agent.MEMORY_TITLE).all()  # the user's memory survives
     count = len(rows)
     for conversation in rows:
         db.delete(conversation)
@@ -425,6 +523,10 @@ def _route_message(db: Session, request: AssistantMessageRequest, user: User, co
     if client_action:
         return client_action
 
+    history_action = _candidate_history_action(db, request.message)
+    if history_action:
+        return history_action
+
     has_candidate_ref = bool(re.search(r"\b(candidate|candidates|person|people|applicant|profile|resume)\b", lower))
     lookup_cue = bool(re.search(r"\b(name|named|called|email|phone|mobile|contact|current\s+company|employer|working\s+at|works\s+at)\b", lower))
     client_names = [name.strip() for (name,) in db.query(Position.client_name).filter(Position.client_name.isnot(None)).distinct().all() if name and name.strip()]
@@ -453,27 +555,6 @@ def _route_message(db: Session, request: AssistantMessageRequest, user: User, co
                 "skills": person.extracted_skills or [], "education": person.education}
                 for person in people]}
 
-    if re.search(r"\b(history|activity|timeline)\b", lower) and re.search(r"\b(candidate|person|applicant)\b", lower):
-        display_id = re.search(r"\bTRU-CN-\d+\b", request.message, re.I)
-        candidate = db.query(Candidate).filter(Candidate.display_id.ilike(display_id.group(0))).first() if display_id else None
-        if candidate is None:
-            name_terms = [term for term in re.findall(r"[A-Za-z][A-Za-z'-]{1,}", request.message)
-                          if term.casefold() not in {"show", "find", "candidate", "person", "applicant", "history", "activity", "timeline", "with", "truhire", "the", "for", "please"}]
-            if name_terms:
-                candidates = db.query(Candidate).filter(Candidate.candidate_name.ilike(f"%{name_terms[0]}%")).limit(2).all()
-                candidate = candidates[0] if len(candidates) == 1 else None
-        if candidate is None:
-            return "Which candidate should I look up? Include their TruHire candidate ID so I can avoid choosing the wrong profile.", {"action": "reply"}
-        events = (db.query(CandidateActivity).filter(CandidateActivity.candidate_id == candidate.id)
-                  .order_by(CandidateActivity.occurred_at.desc(), CandidateActivity.id.desc()).limit(10).all())
-        return (f"Here is the recorded TruHire history for {candidate.display_id or 'this candidate'}." if events
-                else f"There is no recorded TruHire activity for {candidate.display_id or 'this candidate'} yet."), {
-                    "action": "candidate_history", "candidate_id": candidate.id,
-                    "candidate_display_id": candidate.display_id,
-                    "items": [{"event_type": row.event_type, "timestamp": row.occurred_at.isoformat(),
-                               "summary": row.summary, "client_name": row.client_name,
-                               "position_title": row.position_title} for row in events]}
-
     candidate_intent = bool(re.search(r"\b(find|search|show|match|recommend|rank)\b.{0,100}\bcandidates?\b", lower))
     if candidate_intent:
         positions = db.query(Position).filter(Position.client_name.isnot(None),
@@ -488,7 +569,7 @@ def _route_message(db: Session, request: AssistantMessageRequest, user: User, co
                            "client_groups": result.get("client_groups", []), "total_matches": result.get("total_matches", 0)}
         position = _find_position(db, request.message, request.position_id)
         if not position:
-            reply = "Which requirement should I use? Select one below or mention its TRU-JD ID."
+            reply = "Which requirement should I use? Select one below or mention its DM- ID."
             data = {"action": "choose_position", "positions": _position_choices(db)}
         else:
             limit = max(1, min(int(position.no_of_positions or 1), 100))
@@ -520,6 +601,27 @@ def _route_message(db: Session, request: AssistantMessageRequest, user: User, co
 
 
 
+def _deterministic(db: Session, request: AssistantMessageRequest, user: User, conversation: Conversation) -> Optional[tuple]:
+    """Keyword handlers used only when no model can take a tool-calling turn."""
+    routed = _open_positions_action(db, request.message) or _demand_count_action(db, request.message)
+    if routed is None and _field_request(request.message):
+        routed = _field_report_for_request(db, conversation, request)
+    if routed is None:
+        routed = _route_message(db, request, user, conversation)
+    return routed
+
+
+def _agent_answer(db: Session, request: AssistantMessageRequest, user: User, conversation: Conversation) -> Optional[tuple]:
+    """(reply, ui) from the tool-calling agent, or None when it is unavailable."""
+    if _field_request(request.message):  # a JD-upload field report needs the uploaded draft, which only the handler can see
+        return None
+    try:
+        return agent.run_agent(db, user, conversation, request.message, request.position_id)
+    except agent.AgentUnavailable as exc:
+        logger.info("Agent unavailable, using deterministic handlers: %s", str(exc).splitlines()[0][:200])
+        return None
+
+
 def _finish(db: Session, conversation: Conversation, reply: str, data: dict) -> dict:
     _save_message(db, conversation, "assistant", reply, data)
     conversation.updated_at = __import__("datetime").datetime.utcnow()
@@ -537,14 +639,26 @@ def assistant_message(
     _save_message(db, conversation, "user", request.message)
     if _out_of_scope(request, conversation):
         return _finish(db, conversation, REFUSAL, {"action": "reply"})
-    routed = _demand_count_action(db, request.message)
-    if routed is None and _field_request(request.message):
-        routed = _field_report_for_request(db, conversation, request)
-    if routed is None:
-        routed = _route_message(db, request, user, conversation)
+    routed = _agent_answer(db, request, user, conversation) or _deterministic(db, request, user, conversation)
     if routed is None:
         routed = (_generic_reply(db, request, conversation), {"action": "reply"})
     return _finish(db, conversation, *routed)
+
+
+class ConfirmRequest(BaseModel):
+    conversation_id: str
+    pending_id: str
+    approve: bool = True
+
+
+@router.post("/confirm")
+def assistant_confirm(request: ConfirmRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Run or reject a change the assistant proposed (a `confirm_action` card). Single use, owner only."""
+    conversation = db.query(Conversation).filter(Conversation.id == request.conversation_id, Conversation.user_id == user.id).first()
+    if not conversation:
+        raise HTTPException(404, "Conversation not found.")
+    reply, data = agent.resolve_pending(db, user, conversation, request.pending_id, request.approve)
+    return _finish(db, conversation, reply, data)
 
 
 def _sse(event: str, payload: dict) -> str:
@@ -567,11 +681,11 @@ def assistant_message_stream(
     if _out_of_scope(request, conversation):
         done = _finish(db, conversation, REFUSAL, {"action": "reply"})
         return StreamingResponse(iter([_sse("done", done)]), media_type="text/event-stream")
-    routed = _demand_count_action(db, request.message)
-    if routed is None and _field_request(request.message):
-        routed = _field_report_for_request(db, conversation, request)
-    if routed is None:
-        routed = _route_message(db, request, user, conversation)
+    answered = _agent_answer(db, request, user, conversation)
+    if answered is not None:  # the agent works in tool rounds, so its answer arrives as one piece
+        done = _finish(db, conversation, *answered)
+        return StreamingResponse(iter([_sse("token", {"text": done["reply"]}), _sse("done", done)]), media_type="text/event-stream")
+    routed = _deterministic(db, request, user, conversation)
     if routed is not None:
         done = _finish(db, conversation, *routed)
         return StreamingResponse(iter([_sse("done", done)]), media_type="text/event-stream")

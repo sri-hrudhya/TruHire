@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -6,18 +6,18 @@ import { MetaProvider } from './context/MetaContext';
 
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
-import TruHireAssistant from './components/TruHireAssistant';
 
-import AuthPage from './pages/AuthPage';
-import IngestionPage from './pages/IngestionPage';
-import IngestionHistoryPage from './pages/IngestionHistoryPage';
-import JobDescriptionsPage from './pages/JobDescriptionsPage';
-import SearchPage from './pages/SearchPage';
-import CandidateDetailPage from './pages/CandidateDetailPage';
-import CandidateHistoryPage from './pages/CandidateHistoryPage';
-import AnalyticsPage from './pages/AnalyticsPage';
-import EmailPage from './pages/EmailPage';
-import AIAuditPage from './pages/AIAuditPage';
+const TruHireAssistant = lazy(() => import('./components/TruHireAssistant'));
+const AuthPage = lazy(() => import('./pages/AuthPage'));
+const IngestionPage = lazy(() => import('./pages/IngestionPage'));
+const IngestionHistoryPage = lazy(() => import('./pages/IngestionHistoryPage'));
+const JobDescriptionsPage = lazy(() => import('./pages/JobDescriptionsPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const CandidateDetailPage = lazy(() => import('./pages/CandidateDetailPage'));
+const CandidateHistoryPage = lazy(() => import('./pages/CandidateHistoryPage'));
+const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'));
+const EmailPage = lazy(() => import('./pages/EmailPage'));
+const AIAuditPage = lazy(() => import('./pages/AIAuditPage'));
 import { isAdmin } from './lib/review';
 import { DEFAULT_ROUTE } from './lib/navigation';
 import { STORAGE_KEYS } from './config/env';
@@ -76,10 +76,10 @@ function ProtectedLayout() {
       <div className="app-body">
         <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
         <div className="main-content">
-          <Outlet />
+          <Suspense fallback={<div className="page-body" role="status">Loading…</div>}><Outlet /></Suspense>
         </div>
       </div>
-      <TruHireAssistant />
+      <Suspense fallback={null}><TruHireAssistant /></Suspense>
     </div>
   );
 }
@@ -91,7 +91,7 @@ export default function App() {
         <MetaProvider>
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={<AuthPage />} />
+            <Route path="/login" element={<Suspense fallback={null}><AuthPage /></Suspense>} />
 
             <Route element={<ProtectedLayout />}>
               <Route path="/" element={<Navigate to={DEFAULT_ROUTE} replace />} />

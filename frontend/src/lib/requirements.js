@@ -191,3 +191,11 @@ export function groupRows(jds, by, practiceName) {
   const last = (g) => /^no (client|practice) assigned$/i.test(g.label);
   return [...groups.values()].sort((a, b) => last(a) - last(b) || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 }
+
+// Required skills the candidate has: { matched, missing, total, pct } from a match's score_breakdown.
+export function skillCoverage(breakdown) {
+  const matched = breakdown?.matched_skills?.length || 0;
+  const missing = breakdown?.missing_skills?.length || 0;
+  const total = matched + missing;
+  return { matched, missing, total, pct: total ? Math.round((matched / total) * 100) : null };
+}

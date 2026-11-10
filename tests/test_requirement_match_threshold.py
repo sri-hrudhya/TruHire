@@ -140,13 +140,13 @@ def test_requirement_filtering_boundaries_missing_and_statuses(env, monkeypatch)
     scores = [(ids[0], 72.4), (ids[1], 50.0), (ids[2], 49.9), (ids[3], None), (ids[4], 12.0)]
     monkeypatch.setattr(search_module, "execute_candidate_search", _fake_search({jd: scores}))
 
-    # A "Not Shortlisted" status must not hide a qualifying candidate.
-    r = env["client"].put(f"/api/job-descriptions/{jd}/candidates/{ids[1]}/status", json={"status": "Not Shortlisted"}, headers=env["headers"])
+    # A "Rejected" status must not hide a qualifying candidate.
+    r = env["client"].put(f"/api/job-descriptions/{jd}/candidates/{ids[1]}/status", json={"status": "Rejected"}, headers=env["headers"])
     assert r.status_code == 200
 
     data = env["client"].get(f"/api/job-descriptions/{jd}/matches", headers=env["headers"]).json()
     assert [(m["candidate"]["id"], m["match_score"]) for m in data["matches"]] == [(ids[0], 72.4), (ids[1], 50.0)]
-    assert {m["candidate"]["id"]: m["requirement_status"] for m in data["matches"]}[ids[1]] == "Not Shortlisted"
+    assert {m["candidate"]["id"]: m["requirement_status"] for m in data["matches"]}[ids[1]] == "Rejected"
     assert data["total_scored"] == 5 and data["total_matches"] == 2 and data["min_match_score"] == 50.0
 
 

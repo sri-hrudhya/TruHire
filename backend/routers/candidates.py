@@ -17,6 +17,7 @@ from backend.services.common.cache import get_cache, set_cache, delete_cache, cl
 from backend.services.ingestion.storage import delete_file_by_url_or_path, resolve_stored_file
 from backend.config import settings
 from backend.services.candidates.directory import filter_directory
+from backend.services.candidates.history import requirement_rows
 
 router = APIRouter(prefix="/api/candidates", tags=["candidates"])
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ def _serialize_candidate(c: Candidate) -> Dict[str, Any]:
 
 
 @router.get("", response_model=dict)
-def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, uploaded_by: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, uploaded_by: Optional[str] = None, with_requirements: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """uploaded_by omitted: every resume (search/review callers). Given: "me" or a user id narrows to that
     uploader and "all" lifts the filter, but only admins may look at anyone but themselves."""
     bounded = max(1, min(limit, 100))
@@ -82,8 +83,8 @@ def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, u
             uploader_id = user.id
         elif uploaded_by != "all":
             uploader_id = uploaded_by
-    cache_key = f"candidates:list:{bounded}:{offset}:{needle.lower()}:{uploader_id or '*'}"
-    cached = get_cache(cache_key)
+    cache_key = f"candidates:list:{bounded}:{offset}:{needle.lower()}:{uploader_id or '*'}:{int(with_requirements)}"
+    cached = None if with_requirements else get_cache(cache_key)  # requirement statuses change elsewhere; never serve them stale
     if cached is not None:
         return cached
 
@@ -97,13 +98,16 @@ def list_candidates(limit: int = 20, offset: int = 0, q: Optional[str] = None, u
     total = query.count()
     rows = query.offset(offset).limit(bounded).all()
     names = dict(db.query(User.id, User.name).filter(User.id.in_({c.uploaded_by for c in rows})).all()) if rows else {}
+    submitted = requirement_rows(db, [c.id for c in rows]) if with_requirements else {}
     data = {
         "total": total,
         "limit": bounded,
         "offset": offset,
-        "candidates": [{**_serialize_candidate(c), "uploaded_by_name": names.get(c.uploaded_by)} for c in rows]
+        "candidates": [{**_serialize_candidate(c), "uploaded_by_name": names.get(c.uploaded_by),
+                        **({"requirements": submitted[c.id]} if with_requirements else {})} for c in rows]
     }
-    set_cache(cache_key, data, ttl_seconds=settings.CACHE_TTL_QUERY)
+    if not with_requirements:
+        set_cache(cache_key, data, ttl_seconds=settings.CACHE_TTL_QUERY)
     return data
 
 
@@ -207,38 +211,7 @@ def candidate_history(id: str, limit: int = 50, cursor: Optional[str] = None,
         last = rows[-1]
         next_cursor = urlsafe_b64encode(f"{last.occurred_at.isoformat()}|{last.id}".encode()).decode("ascii")
     candidate = db.get(Candidate, id)
-    requirement_rows = (db.query(RequirementCandidateStatus, Position, User)
-                        .join(Position, Position.id == RequirementCandidateStatus.position_id)
-                        .outerjoin(User, User.id == RequirementCandidateStatus.updated_by)
-                        .filter(RequirementCandidateStatus.candidate_id == id)
-                        .order_by(RequirementCandidateStatus.updated_at.desc()).all())
-    requirements = [{"id": position.id, "display_id": position.display_id, "title": position.title,
-                     "client_name": position.client_name, "demand_owner": position.demand_owner, "status": status.status,
-                     "last_modified": status.updated_at.isoformat() if status.updated_at else None,
-                     "modified_by": actor.name if actor else None}
-                    for status, position, actor in requirement_rows]
-    known_positions = {item["id"] for item in requirements}
-    match_rows = (db.query(CandidateMatch, Position)
-                  .join(Position, Position.id == CandidateMatch.position_id)
-                  .filter(CandidateMatch.candidate_id == id)
-                  .order_by(CandidateMatch.updated_at.desc()).all())
-    requirements.extend({"id": position.id, "display_id": position.display_id, "title": position.title,
-                         "client_name": position.client_name, "demand_owner": position.demand_owner, "status": DEFAULT_REQUIREMENT_STATUS,
-                         "last_modified": match.updated_at.isoformat() if match.updated_at else None,
-                         "modified_by": None}
-                        for match, position in match_rows if position.id not in known_positions)
-    known_positions.update(item["id"] for item in requirements)
-    assignment_rows = (db.query(CandidateAssignment, Position, User)
-                       .join(Position, Position.id == CandidateAssignment.position_id)
-                       .outerjoin(User, User.id == CandidateAssignment.assigned_by)
-                       .filter(CandidateAssignment.candidate_id == id)
-                       .order_by(CandidateAssignment.created_at.desc()).all())
-    requirements.extend({"id": position.id, "display_id": position.display_id, "title": position.title,
-                         "client_name": position.client_name, "demand_owner": position.demand_owner, "status": DEFAULT_REQUIREMENT_STATUS,
-                         "last_modified": assignment.created_at.isoformat() if assignment.created_at else None,
-                         "modified_by": actor.name if actor else None}
-                        for assignment, position, actor in assignment_rows if position.id not in known_positions)
-    requirements.sort(key=lambda item: item["last_modified"] or "", reverse=True)
+    requirements = requirement_rows(db, [id])[id]
     return {"current_status": {"status": candidate.status,
                                 "last_modified": candidate.status_updated_at.isoformat() if candidate.status_updated_at else None,
                                 "modified_by": db.query(User.name).filter(User.id == candidate.status_updated_by).scalar() if candidate.status_updated_by else None},

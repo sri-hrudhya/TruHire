@@ -40,7 +40,9 @@ export function CancelReasonModal({ initial = '', onConfirm, onClose }) {
 
 // Choosing Mapped or Fulfilled asks which resume(s) the demand is filled with: search by resume ID or name,
 // tick one or more, then confirm. `initial` is the current selection as [{ id, display_id, candidate_name }].
-export function MapResumesModal({ status, initial = [], onConfirm, onClose }) {
+// With `matches` (the demand's ranked candidates) only those best matches are offered, each with its match %;
+// without it (a demand not saved yet) any resume can be searched.
+export function MapResumesModal({ status, initial = [], matches, onConfirm, onClose }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -49,7 +51,12 @@ export function MapResumesModal({ status, initial = [], onConfirm, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
+  const ranked = matches && [...matches].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0)).map((m) => ({ ...m.candidate, match_score: m.match_score }));
+  const needle = query.trim().toLowerCase();
+  const shown = ranked ? ranked.filter((c) => !needle || `${c.display_id || ''} ${c.candidate_name || ''}`.toLowerCase().includes(needle)) : results;
+
   useEffect(() => {
+    if (ranked) return undefined;
     let live = true;
     setSearching(true);
     const timer = setTimeout(async () => {
@@ -63,7 +70,8 @@ export function MapResumesModal({ status, initial = [], onConfirm, onClose }) {
       }
     }, query ? 250 : 0);
     return () => { live = false; clearTimeout(timer); };
-  }, [query]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, !!ranked]);
 
   const toggle = (c) => setSelected((prev) => {
     const next = new Map(prev);
@@ -84,7 +92,7 @@ export function MapResumesModal({ status, initial = [], onConfirm, onClose }) {
       <div className="folder-search">
         <Search size={16} aria-hidden="true" />
         <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus
-          placeholder="Search resumes by ID or candidate name" aria-label="Search resumes by ID or candidate name" />
+          placeholder={ranked ? "Filter the best matches by ID or name" : "Search resumes by ID or candidate name"} aria-label="Search resumes by ID or candidate name" />
       </div>
       {selected.size > 0 && (
         <ul className="chip-list" aria-label="Selected resumes">
@@ -97,17 +105,18 @@ export function MapResumesModal({ status, initial = [], onConfirm, onClose }) {
         </ul>
       )}
       {searchError && <p className="req-error" role="alert">{searchError}</p>}
-      <ul className="resume-pick" aria-label="Matching resumes" aria-busy={searching}>
-        {results.map((c) => (
+      <ul className="resume-pick" aria-label={ranked ? "Best matching candidates" : "Matching resumes"} aria-busy={searching}>
+        {shown.map((c) => (
           <li key={c.id}>
             <label className="resume-pick-row">
               <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c)} />
               <span className="slug">{c.display_id || '—'}</span>
               <span>{c.candidate_name || 'Unnamed candidate'}</span>
+              {typeof c.match_score === 'number' && <span className="slug">{c.match_score.toFixed(1)}% match</span>}
             </label>
           </li>
         ))}
-        {!searching && !searchError && results.length === 0 && <li className="req-empty">{query.trim() ? `No resumes match “${query.trim()}”.` : 'No resumes uploaded yet.'}</li>}
+        {!searching && !searchError && shown.length === 0 && <li className="req-empty">{query.trim() ? `No resumes match “${query.trim()}”.` : ranked ? 'No candidates match this demand yet.' : 'No resumes uploaded yet.'}</li>}
       </ul>
       {error && <p className="req-error" role="alert">{error}</p>}
     </Modal>

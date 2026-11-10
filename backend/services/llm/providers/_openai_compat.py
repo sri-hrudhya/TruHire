@@ -107,9 +107,12 @@ class CloudProvider:
     def model_name(self) -> str:
         return getattr(settings, self.model_setting)
 
-    def _request(self, key: str, messages: List[Dict[str, str]], temperature: float, max_tokens: int, stream: bool) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    def _request(self, key: str, messages: List[Dict[str, Any]], temperature: float, max_tokens: int, stream: bool,
+                 tools: Optional[List[Dict[str, Any]]] = None) -> Tuple[Dict[str, str], Dict[str, Any]]:
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", **dict(self.extra_headers)}
         payload = {"model": self.model_name(), "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        if tools:
+            payload["tools"] = tools
         return headers, ({**payload, "stream": True} if stream else payload)
 
     def chat_completion(
@@ -121,9 +124,22 @@ class CloudProvider:
         deadline: Optional[float] = None,
         **_ignored,  # absorbs vLLM-specific kwargs (e.g. enable_thinking)
     ) -> str:
+        content = self.chat_message(messages, temperature=temperature, max_tokens=max_tokens, deadline=deadline).get("content")
+        return "" if content is None else str(content)
+
+    def chat_message(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        deadline: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """The assistant message (``content`` and, with ``tools``, ``tool_calls``) from the first key that answers."""
         run = _KeyRun(self.name, self.keys(), deadline)
         for key, timeout in run:
-            headers, payload = self._request(key, messages, temperature, max_tokens, stream=False)
+            headers, payload = self._request(key, messages, temperature, max_tokens, stream=False, tools=tools)
             try:
                 with httpx.Client(timeout=timeout) as client:
                     resp = client.post(self.endpoint, headers=headers, json=payload)
@@ -142,8 +158,7 @@ class CloudProvider:
             choices = data.get("choices") or []
             if not choices:
                 raise RuntimeError(f"{self.name} returned no choices.")
-            content = (choices[0].get("message") or {}).get("content")
-            return "" if content is None else str(content)
+            return choices[0].get("message") or {}
         raise run.exhausted()
 
     def chat_completion_stream(

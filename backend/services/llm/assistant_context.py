@@ -22,12 +22,13 @@ GLOSSARY = (
     "TERMINOLOGY (authoritative for this product):\n"
     f"- Practice: one of the fixed folders {', '.join(DEFAULT_DEMAND_NAMES)}. It groups demands by skill area. "
     "Practices are system data; users cannot add or rename them. (In the database a practice is a `Demand` row.)\n"
-    "- Demand / requirement / JD: one hiring need (a job description, id like TRU-JD-12). The words are "
+    "- Demand / requirement / JD: one hiring need (a job description, id like DM-0012). The words are "
     "interchangeable. A demand is filed under at most one practice and has an optional client, status "
     f"({', '.join(JD_STATUSES)}), role, location, experience range, number of positions and start/end dates.\n"
     "- Client: the customer a demand is for (a name on the demand). A client is not a practice: one client can "
     "have demands in several practices, and a practice holds demands for several clients.\n"
-    "- Positions: the number of people to hire for one demand, not a count of demands.\n"
+    "- Positions: the number of people to hire for one demand (open positions), not a count of demands. "
+    "It is `positions_to_hire` on each listed requirement.\n"
     "- Cancelled demands stay on record but are not counted as live."
 )
 
@@ -76,7 +77,7 @@ _STOP = {
 def _relevant(positions: List[Position], message: str, position_id: Optional[str]) -> List[Position]:
     """Requirements the question is about (by id, practice, client or title words); the newest ones otherwise."""
     lowered = (message or "").lower()
-    ids = {m.upper() for m in re.findall(r"\bTRU-JD-\d+\b", message or "", re.I)}
+    ids = {m.upper() for m in re.findall(r"\bDM-\d+\b", message or "", re.I)}
     picked = [p for p in positions if p.id == position_id or (p.display_id or "").upper() in ids]
     if not picked:
         names = {_practice(p).lower() for p in positions} | {_client(p).lower() for p in positions if _client(p) != NO_CLIENT}
@@ -113,7 +114,8 @@ def build_data_context(db: Session, message: str, position_id: Optional[str] = N
 
     relevant = _relevant(positions, message, position_id)
     return {
-        "totals": {"all_requirements": len(positions), "live_requirements": len(live), "cancelled": len(positions) - len(live)},
+        "totals": {"all_requirements": len(positions), "live_requirements": len(live), "cancelled": len(positions) - len(live),
+                   "open_positions_to_hire_in_live_requirements": sum(p.no_of_positions or 0 for p in live)},
         "practices": {name: dict(counts) for name, counts in per_practice.items()},
         "live_requirements_by_client": {name: dict(counts) for name, counts in sorted(clients.items(), key=lambda kv: (kv[0] == NO_CLIENT, kv[0].casefold()))},
         "listed_requirements": [row(p, with_text=len(relevant) <= 3) for p in relevant],

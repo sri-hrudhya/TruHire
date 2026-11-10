@@ -14,7 +14,7 @@ from backend.rate_limit import limiter
 from backend.services.common.observability import ObservabilityMiddleware
 from backend.services.common.retention import schedule_retention_cleanup_task
 from backend.services.retrieval.opensearch import init_opensearch_index
-from backend.routers import auth, ingestion, job_descriptions, candidates, search, analytics, export, retention, email, ai_audit, demands, meta, reviews, users, assistant, assistant_demand
+from backend.routers import auth, ingestion, job_descriptions, candidates, search, analytics, export, retention, email, ai_audit, demands, meta, reviews, users, assistant, assistant_demand, tracker
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,7 @@ for router in (
     users.router,
     assistant.router,
     assistant_demand.router,
+    tracker.router,
 ):
     app.include_router(router)
 

@@ -68,3 +68,13 @@ def _baseline_data():
     finally:
         db.close()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _agent_model_offline(monkeypatch):
+    """Tests never call a real model: the assistant agent reports itself unavailable (so the deterministic
+    handlers answer) unless a test installs its own fake `chat_with_tools`."""
+    def offline(*args, **kwargs):
+        raise RuntimeError("no model in tests")
+
+    monkeypatch.setattr("backend.services.llm.agent.chat_with_tools", offline)

@@ -9,14 +9,18 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { candidatesApi } from '../lib/api';
+import { useMeta } from '../context/MetaContext';
+import { skillCoverage } from '../lib/requirements';
 import ResumePreviewModal from '../components/ResumePreviewModal';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { useBackNavigation } from '../lib/navigation';
 import CommentThread from '../components/review/CommentThread';
 import './candidate-detail.css';
+import { formatIst } from '../lib/datetime';
 
 export default function CandidateDetailPage() {
   const { id } = useParams();
+  const { requirement_statuses: requirementStatuses } = useMeta();
   // Back returns to wherever the profile was opened from (Search, Requirements, Ingestion History).
   const { goBack, backLabel } = useBackNavigation('/search', 'Search');
   const [candidate, setCandidate] = useState(null);
@@ -314,7 +318,7 @@ export default function CandidateDetailPage() {
                     </div>
 
                     <span className={`badge ${badgeClass}`} style={{ fontSize: '0.8125rem', fontWeight: 800 }}>
-                      {m.match_score.toFixed(1)}% Match
+                      {m.match_score.toFixed(1)}% overall
                     </span>
                   </div>
 
@@ -323,9 +327,19 @@ export default function CandidateDetailPage() {
                     <select className="input-field" value={m.requirement_status || 'New'}
                       onChange={(event) => handleRequirementStatusUpdate(m.position_id, event.target.value)}
                       aria-label={`Hiring stage for ${m.position_display_id || m.position_title}`} style={{ width: 'auto' }}>
-                      {['New', 'Shortlisted', 'Interviewed', 'Rejected'].map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+                      {requirementStatuses.map((stage) => <option key={stage} value={stage}>{stage}</option>)}
                     </select>
                   </label>
+
+                  <p style={{ fontSize: '1.5rem', margin: '0 0 0.5rem' }}>
+                    <strong>Skills matched {skillCoverage(m.score_breakdown).matched} of {skillCoverage(m.score_breakdown).total}{skillCoverage(m.score_breakdown).pct !== null && ` (${skillCoverage(m.score_breakdown).pct}%)`}</strong> · Missing {skillCoverage(m.score_breakdown).missing}
+                  </p>
+                  {[['Matches the requirement', m.score_breakdown?.matched_skills, 'badge-success'], ['Missing for the requirement', m.score_breakdown?.missing_skills, 'badge-neutral']].map(([label, skills, tone]) => skills?.length > 0 && (
+                    <div key={label} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.35rem', marginBottom: '0.5rem', fontSize: '0.8125rem' }}>
+                      <strong>{label}</strong>
+                      {skills.map((skill) => <span key={skill} className={`badge ${tone}`} style={{ fontSize: '0.75rem' }}>{skill}</span>)}
+                    </div>
+                  ))}
 
                   {/* Summary & Citation */}
                   {m.llm_summary && (
@@ -367,27 +381,25 @@ export default function CandidateDetailPage() {
 
       <section className="card" style={{ marginTop: '2rem', padding: '1.5rem' }}>
         <div className="section-head"><h2>Candidate History</h2></div>
-        <p className="dek">Availability: <strong>{candidate.availability_status || 'Active'}</strong>
-          {candidate.availability_updated_at && <> · Last modified {new Date(candidate.availability_updated_at).toLocaleString()}{candidate.availability_updated_by ? ` by ${history.find((event) => event.event_type === 'availability_status_changed')?.actor || 'a recruiter'}` : ''}</>}
-        </p>
-        <h3>Requirements and client status</h3>
+        <h3>Submitted to - Current status</h3>
         {requirementHistory.length ? <ul className="candidate-requirement-history">
           {requirementHistory.map((item) => <li key={item.id}>
-            <strong>{item.client_name || 'No client'} — {item.status}</strong>
+            <strong>{item.client_name || 'No client'} - {item.status}</strong>
             <span>{[item.display_id, item.title].filter(Boolean).join(' · ')}{item.demand_owner ? ` · Demand owner: ${item.demand_owner}` : ''}</span>
-            {item.last_modified && <small>Last modified {new Date(item.last_modified).toLocaleString()}{item.modified_by ? ` | Modified by ${item.modified_by}` : ''}</small>}
+            {item.last_modified && <small>Last modified {formatIst(item.last_modified)}{item.modified_by ? ` | Modified by ${item.modified_by}` : ''}</small>}
           </li>)}
-        </ul> : <p className="dek">No requirement status has been recorded yet.</p>}
-        <h3>Activity notes</h3>
-        {history.length ? <ol className="candidate-history" aria-label="Candidate history with TruHire">
+        </ul> : <p className="dek">Not submitted to any requirement yet.</p>}
+        <h3>Notes</h3>
+        <p className="dek">Availability: <strong>{candidate.availability_status || 'Active'}</strong></p>
+        {history.length ? <ol className="candidate-history" aria-label="Candidate notes, newest first">
           {history.map((event) => <li key={event.id}>
             <strong>{event.summary}</strong>
-            {(event.position_title || event.client_name) && <span>{[event.position_title, event.client_name].filter(Boolean).join(' · ')}</span>}
-            <small>Last modified {new Date(event.timestamp).toLocaleString()}{event.actor ? ` | Modified by ${event.actor}` : ''}</small>
+            {(event.position_title || event.client_name) && <span>{[event.client_name, event.position_title].filter(Boolean).join(' · ')}</span>}
+            <small>Last modified {formatIst(event.timestamp)}{event.actor ? ` | Modified by ${event.actor}` : ''}</small>
           </li>)}
-        </ol> : <p className="dek">No recorded activity yet. New status and review activity will appear here.</p>}
+        </ol> : <p className="dek">No notes yet. A note is added whenever a status changes.</p>}
         {historyHasMore && <button type="button" className="btn btn-secondary btn-compact" onClick={loadMoreHistory} disabled={historyLoadingMore}>
-          {historyLoadingMore ? 'Loading…' : 'Load more history'}
+          {historyLoadingMore ? 'Loading…' : 'Load more notes'}
         </button>}
       </section>
 
